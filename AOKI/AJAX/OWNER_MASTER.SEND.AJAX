@@ -100,7 +100,7 @@ fi
 # POSTデータ取得
 if [ ! -z "$CONTENT_LENGTH" ];then
 	dd bs="$CONTENT_LENGTH"                       |
-	cgi-name -n_ -s_ -e_                              |
+	cgi-name -n_ -s_ -e_                          |
 	cat                                           > $tmp-name
 ERROR_CHECK
 else
