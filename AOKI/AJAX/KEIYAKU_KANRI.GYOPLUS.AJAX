@@ -1,0 +1,216 @@
+#!/usr/bin/bash -vx
+############################################################
+#
+# KEIYAKU_KANRI.GYOPLUS.AJAX
+#
+# 契約管理情報 行追加  AJAX
+#
+# 作成者: t-kaida@usp-lab.com
+# 作成日: 2022/10/05
+#
+############################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+############################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv3d=$homd/DATA/LV3
+comd=$homd/APP/COMMON/HTML
+sesd=$homd/SESSION
+tmp=/tmp/tmp-$(basename $0).$(date +'%Y%m%d_%H%M%S').$$
+
+############################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+############################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+##################################################
+# セッション確認
+echo $HTTP_COOKIE                                                  |
+sed 's/; */\n/g'                                                   |
+sed -n 's/=/ /p'                                                   |
+cat                                                                > $tmp-cookie
+ERROR_CHECK
+
+session=$(nameread KEY $tmp-cookie)
+
+check_session $session                                             > $tmp-session_check
+ERROR_CHECK
+
+# user情報
+user=$(selr 1 "user" $sesd/SESSION.$session | self 2)
+user_name=$(selr 1 "$user" $lv3d/TBL/USER_USERNAME | self 2)
+user_kaisha=$(selr 1 "$user" $lv3d/USER_MASTER/USER_MASTER | self 4)
+user_permit=$(selr 1 "$user" $lv3d/USER_MASTER/USER_MASTER | self 5)
+
+
+############################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"             |
+	cgi-name -n_ -s_                    |
+	cat                                 > $tmp-name
+ERROR_CHECK
+else
+	:                                   > $tmp-name
+ERROR_CHECK
+fi
+
+############################################################
+# アプリケーション由来情報の取得
+# 選択部
+kaisha=$(nameread 会社P $tmp-name)
+tenpo=$(nameread 店舗P $tmp-name)
+kanrino=$(nameread 管理番号P $tmp-name)
+
+# 表示情報の作成
+cat $tmp-name                               |
+name-tag                                    |
+tagself	ID            会社               業態          使用状態         担当者						\
+				管理番号      オーナCD           オーナCD枝番  店舗コード       店舗名 						\
+				契約先		    個法人区分         契約名称      賃貸借関係       契約種類					\
+				物件名				OPEN日             契約日        原契約期間開始日 原契約期間満了日	\
+				原契約期間    更新契約期間満了日 更新契約期間  全契約期間       次回改定日				\
+			  更新予告日    解約予告日         摘要          過去最高賃料     前回賃料					\
+			  賃料          共益費             駐車場        その他           賃料合計					\
+				消費税        相殺額             月額支払			 支払方法         消費税区分				\
+				改定内容      敷金残高           保証金残高    建設協力金残高   改定条件					\
+				更新条件      更新予告           更新手数料		 自動更新         解約予告					\
+				中途解約条件  明渡条件           契約敷地面積	 契約敷地合計     契約延床面積			\
+				契約住所      契約先コード       契約形態      都道府県名		    修繕区分契約内容	\
+				主キー        オーナCD2          オーナCD枝番2 オーナ名2        オーナ解約2				\
+				オーナCD3     オーナCD枝番3      オーナ名3     オーナ解約3      オーナCD4					\
+				オーナCD枝番4 オーナ名4          オーナ解約4   オーナCD5        オーナCD枝番5			\
+				オーナ名5     オーナ解約5			   オーナCD6     オーナCD枝番6    オーナ名6					\
+				オーナ解約6   オーナCD7          オーナCD枝番7 オーナ名7        オーナ解約7				\
+				オーナCD8     オーナCD枝番8      オーナ名8     オーナ解約8      オーナCD9					\
+				オーナCD枝番9 オーナ名9          オーナ解約9   オーナCD10       オーナCD枝番10		\
+				オーナ名10    オーナ解約10		   オーナCD11    オーナCD枝番11   オーナ名11				\
+				オーナ解約11																			    														|
+
+sed 1d                                      | # ヘッダー排除
+self 0 6																		| # 管理番号を退避
+# 既存データのキー項目の値を変更不可とする、属性またはクラスを追加
+uawk '{
+        if($1 == "_"){
+                print $0, "_ _ _"
+        }else{
+                print $0, "_", "readonly", "form-control-readonly", "tabindex=\"-1\"", "disabled"
+        }
+}'                                          |
+tee $tmp-post_data                         	|
+delr 1 "_"                                  | # 登録なしの場合は排除
+cat                                         > $tmp-check_data
+ERROR_CHECK
+#
+#  1:ID             2:会社                3:業態           4:使用状態          5:担当者
+#  6:管理番号       7:オーナCD            8:オーナCD枝番   9:店舗コード        10:店舗名
+#  11:契約先        12:個法人区分         13:契約名称      14:賃貸借関係       15:契約種類
+#  16:物件名        17:OPEN日             18:契約日        19:原契約期間開始日 20:原契約期間満了日
+#  21:原契約期間    22:更新契約期間満了日 23:更新契約期間  24:全契約期間       25:次回改定日
+#  26:更新予告日    27:解約予告日         28:摘要          29:過去最高賃料     30:前回賃料
+#  31:賃料          32:共益費             33:駐車場        34:その他           35:賃料合計
+#  36:消費税        37:相殺額             38:月額支払      39:支払方法         40:消費税区分
+#  41:改定内容      42:敷金残高           43:保証金残高    44:建設協力金残高   45:改定条件
+#  46:更新条件      47:更新予告           48:更新手数料    49:自動更新         50:解約予告
+#  51:中途解約条件  52:明渡条件           53:契約敷地面積  54:契約敷地合計     55:契約延床面積
+#  56:契約住所      57:契約先コード       58:契約形態      59:都道府県名       60:修繕区分契約内容
+#  61:主キー        62:オーナCD2          63:オーナCD枝番2 64:オーナ名2        65:オーナ解約2
+#  66:オーナCD3     67:オーナCD枝番3      68:オーナ名3     69:オーナ解約3      70:オーナCD4
+#  71:オーナCD枝番4 72:オーナ名4          73:オーナ解約4   74:オーナCD5        75:オーナCD枝番5
+#  76:オーナ名5     77:オーナ解約5        78:オーナCD6     79:オーナCD枝番6    80:オーナ名6
+#  81:オーナ解約6   82:オーナCD7          83:オーナCD枝番7 84:オーナ名7        85:オーナ解約7
+#  86:オーナCD8     87:オーナCD枝番8      88:オーナ名8     89:オーナ解約8      90:オーナCD9
+#  91:オーナCD枝番9 92:オーナ名9          93:オーナ解約9   94:オーナCD10       95:オーナCD枝番10
+#  96:オーナ名10    97:オーナ解約10       98:オーナCD11    99:オーナCD枝番11   100:オーナ名11
+#  101:オーナ解約11 102:管理番号（退避）  103:readonly     104:form-control-readonly 105:tabindex="-1"
+
+#if [ -s $tmp-check_data ];then
+        # 追加分の取得
+        cat $tmp-post_data		|
+        selr 2 "$kaisha"    	| # 会社絞り込み
+        selr 9 "$tenpo"     	| # 店舗絞り込み
+        selr 6 "$kanrino"   	| # 管理番号絞り込み
+
+        strcat	\"_\" 2     3     4     5     6     \"_\" \"_\" 9     10      \
+								\"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" 	\
+								\"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" 	\
+								\"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" 	\
+								\"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" 	\
+								\"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" 	\
+								\"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" 	\
+								\"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" 	\
+								\"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" 	\
+								\"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" 	\
+								\"_\" \"_\" \"_\" \"_\" \"_\" \"_\"   												|
+				atama -n 1          				|
+        cat $tmp-post_data -				| # 現在表示分と追加分のマージ
+        msort key=2@9@6   					|
+				self 1/5 102 7/101 103/105	|
+        juni                  			|
+        cat                   			> $tmp-data
+				ERROR_CHECK
+#else
+#        cat $tmp-post_data    > $tmp-data
+#				ERROR_CHECK
+#fi
+
+cat << FIN > $tmp-error_calsed
+###エラーメッセージクラス### d-none
+###エラーメッセージ###
+FIN
+
+# 送信情報の作成
+cat $htmd/KEIYAKU_KANRI.HTML                                                                                      |
+sed -n '/検索テーブルA/,/検索テーブルB/p'                                                                         |
+mojihame -l###会社リスト### - <(cat $lv3d/TBL/KAISHA_NAME | selr --through 001 1 "$user_kaisha"  | msort key=NF)  |
+mojihame -l###業態リスト### - <(cat $lv3d/TBL/GYOTAI_NAME | msort key=NF)                                         |
+mojihame -l###使用状態リスト### - <(cat $lv3d/TBL/SHIYOJOTAI_NAME | msort key=NF)                                 |
+mojihame -l###個法人区分リスト### - <(cat $lv3d/TBL/KOJINHOJIN_KUBUN_NAME | msort key=NF)                         |
+mojihame -l###契約名称リスト### - <(cat $lv3d/TBL/KEIYAKU_MEISHO_NAME | msort key=NF)                             |
+mojihame -l###賃貸借関係リスト### - <(cat $lv3d/TBL/CHINTAISHAKU_KANKEI_NAME | msort key=NF)                      |
+mojihame -l###契約種類リスト### - <(cat $lv3d/TBL/KEIYAKU_SHURUI_NAME | msort key=NF)                             |
+mojihame -l###物件名リスト### - <(cat $lv3d/TBL/BUKKENMEI_NAME | msort key=NF)                                    |
+mojihame -l###支払方法リスト### - <(cat $lv3d/TBL/SHIHARAIHOHO_NAME | msort key=NF)                               |
+mojihame -l###消費税区分リスト### - <(cat $lv3d/TBL/SHOHIZEI_KUBUN_NAME | msort key=NF)                           |
+mojihame -l###改定条件リスト### - <(cat $lv3d/TBL/KAITEIJOKEN_NAME | msort key=NF)                                |
+mojihame -l###更新条件リスト### - <(cat $lv3d/TBL/KOSHIN_JOKEN_NAME | msort key=NF)                               |
+mojihame -l###更新予告リスト### - <(cat $lv3d/TBL/KOSHIN_YOKOKU_NAME | msort key=NF)                              |
+mojihame -l###更新手数料リスト### - <(cat $lv3d/TBL/KOSHIN_TESURYO_NAME | msort key=NF)                           |
+mojihame -l###自動更新リスト### - <(cat $lv3d/TBL/JIDO_KOSHIN_NAME | msort key=NF)                                |
+mojihame -l###中途解約条件リスト### - <(cat $lv3d/TBL/CHUTOKAIYAKU_JOKEN_NAME | msort key=NF)                     |
+mojihame -l###解約予告リスト### - <(cat $lv3d/TBL/KAIYAKU_YOKOKU_NAME | msort key=NF)                             |
+mojihame -l###明渡条件リスト### - <(cat $lv3d/TBL/AKEWATASHI_JOKEN_NAME | msort key=NF)                           |
+mojihame -l###契約情報### - $tmp-data                                                                             |
+calsed -f $tmp-error_calsed                                                                                       |
+cat                                                                                                               > $tmp-ajax
+ERROR_CHECK
+
+############################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+cat $tmp-ajax
+
+############################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0
+

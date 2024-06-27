@@ -1,0 +1,224 @@
+#!/usr/bin/bash -vx
+#
+# PL_JOHO.SEND.AJAX
+#
+# PL情報 登録AJAX
+#
+# 作成者: h-kato@usp-lab.com
+# 作成日: 2022/11/21
+#
+##################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+##################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv1d=$homd/DATA/LV1
+lv3d=$homd/DATA/LV3
+tbld=$homd/TBL
+sysd=$homd/SYS
+comd=$homd/APP/COMMON/HTML
+tmp=/tmp/tmp-$$
+sesd=$homd/SESSION
+
+today=$(date +%Y%m%d)
+todayhms=$(date +%Y%m%d%H%M%S)
+##################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+##################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+##################################################
+# セッション確認
+echo $HTTP_COOKIE                                                  |
+sed 's/; */\n/g'                                                   |
+sed -n 's/=/ /p'                                                   |
+cat                                                                > $tmp-cookie
+ERROR_CHECK
+
+session=$(nameread KEY $tmp-cookie)
+
+check_session $session                                             > $tmp-session_check
+ERROR_CHECK
+
+# セッションがない場合、ログイン画面へ遷移
+if [ ! -s $tmp-session_check ];then
+        cat $comd/GOTOURL.HTML                                     |
+        calsed "###URL###" "../../COMMON/CGI/LOGIN.CGI"            |
+        cat                                                        > $tmp-html
+ERROR_CHECK
+
+        # HTML表示
+        echo "Content-type:text/html"
+        echo
+        cat $tmp-html
+ERROR_CHECK
+
+        rm -rf $tmp-*
+        exit 0
+fi
+
+# user情報
+user=$(selr 1 "user" $sesd/SESSION.$session | self 2)
+user_name=$(selr 1 "$user" $lv3d/TBL/USER_USERNAME | self 2)
+user_permit=$(selr 1 "$user" $lv3d/USER_MASTER/USER_MASTER | self 5)
+
+##################################################
+# ユーザ権限チェック
+if [ "$user_permit" == "01" ]; then
+	:
+else
+	echo "Content-type:text/html"
+	echo ""
+	cat $comd/GOTOURL.HTML                          |
+	calsed "###URL###" "../../COMMON/CGI/LOGIN.CGI" |
+	cat
+	rm -rf $tmp-*
+	exit 0
+fi
+
+
+##################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"                       |
+	cgi-name -n_ -s_                              |
+	cat                                           > $tmp-name
+ERROR_CHECK
+else
+	:                                             > $tmp-name
+ERROR_CHECK
+fi
+##################################################
+
+# エラーリストを作成
+cat $tmp-name      |
+nameread エラーNO  |
+tr "," " "         |
+tarr               |
+#  1:エラーNO
+msort key=1        |
+cat                > $tmp-error_list
+ERROR_CHECK
+
+# 登録処理
+# 取得情報整形
+cat $tmp-name                                        |
+name-tag                                             |
+tagself 会社       店舗CD     会計年度  区分      売上高       \
+        売上原価   経準率     経準高    販売費    人件費       \
+        営業活動費 設備活動費 一般費    経費合計  営業貢献利益 \
+        営業利益   経常利益   投資回収  契約内容A 契約内容B    \
+        契約内容C  契約内容D  契約内容E 契約内容F 契約内容G    \
+        契約内容H  契約内容I  契約内容J 契約内容K 契約内容L    \
+        契約内容M  契約内容N  削除      NO                     |
+#  1:会社        2:店舗CD      3:会計年度   4:区分       5:売上高       
+#  6:売上原価    7:経準率      8:経準高     9:販売費     10:人件費      
+#  11:営業活動費 12:設備活動費 13:一般費    14:経費合計  15:営業貢献利益
+#  16:営業利益   17:経常利益   18:投資回収  19:契約内容A 20:契約内容B   
+#  21:契約内容C  22:契約内容D  23:契約内容E 24:契約内容F 25:契約内容G   
+#  26:契約内容H  27:契約内容I  28:契約内容J 29:契約内容K 30:契約内容L   
+#  31:契約内容M  32:契約内容N  33:削除F     34:NO
+# 必須項目、会社がないものは排除
+delr 1 "_"                                           |
+# ヘッダー排除
+sed 1d                                               |
+#  1:会社        2:店舗CD      3:会計年度   4:区分       5:売上高       
+#  6:売上原価    7:経準率      8:経準高     9:販売費     10:人件費      
+#  11:営業活動費 12:設備活動費 13:一般費    14:経費合計  15:営業貢献利益
+#  16:営業利益   17:経常利益   18:投資回収  19:契約内容A 20:契約内容B   
+#  21:契約内容C  22:契約内容D  23:契約内容E 24:契約内容F 25:契約内容G   
+#  26:契約内容H  27:契約内容I  28:契約内容J 29:契約内容K 30:契約内容L   
+#  31:契約内容M  32:契約内容N  33:削除F     34:NO        
+# 登録時エラーがあるものは除去
+cjoin1 +ng3 key=34 $tmp-error_list 3>&1 1>/dev/null  |
+delf 34                                              |
+#  1:会社        2:店舗CD      3:会計年度   4:区分       5:売上高       
+#  6:売上原価    7:経準率      8:経準高     9:販売費     10:人件費      
+#  11:営業活動費 12:設備活動費 13:一般費    14:経費合計  15:営業貢献利益
+#  16:営業利益   17:経常利益   18:投資回収  19:契約内容A 20:契約内容B   
+#  21:契約内容C  22:契約内容D  23:契約内容E 24:契約内容F 25:契約内容G   
+#  26:契約内容H  27:契約内容I  28:契約内容J 29:契約内容K 30:契約内容L   
+#  31:契約内容M  32:契約内容N  33:削除F
+# 削除の場合はフラグを1へ
+fsed 's/true/1/33' 's/false/0/33'                    |
+# カンマを消す
+fsed 's/,//5' 's/,//6' 's/,//8' 's/,//9' 's/,//10'   \
+     's/,//11' 's/,//12' 's/,//13' 's/,//14' 's/,//15' \
+		 's/,//16' 's/,//17' 's/,//18'                   |
+# 登録済み情報との差分のみ取得
+msort key=1/4                                        |
+cjoin1 +ng2 key=1/33 $lv3d/PL_DATA/PL_DATA 1> /dev/null 2> $tmp-send_data
+ERROR_CHECK
+
+# 登録差分が存在する場合
+if [ -s $tmp-send_data ];then
+#  1:会社        2:店舗CD      3:会計年度   4:区分       5:売上高       
+#  6:売上原価    7:経準率      8:経準高     9:販売費     10:人件費      
+#  11:営業活動費 12:設備活動費 13:一般費    14:経費合計  15:営業貢献利益
+#  16:営業利益   17:経常利益   18:投資回収  19:契約内容A 20:契約内容B   
+#  21:契約内容C  22:契約内容D  23:契約内容E 24:契約内容F 25:契約内容G   
+#  26:契約内容H  27:契約内容I  28:契約内容J 29:契約内容K 30:契約内容L   
+#  31:契約内容M  32:契約内容N  33:削除F
+  # 登録情報の作成
+	cat $tmp-send_data      |
+  strcat 0 \"$todayhms\"  |
+#  1:会社        2:店舗CD      3:会計年度   4:区分       5:売上高       
+#  6:売上原価    7:経準率      8:経準高     9:販売費     10:人件費      
+#  11:営業活動費 12:設備活動費 13:一般費    14:経費合計  15:営業貢献利益
+#  16:営業利益   17:経常利益   18:投資回収  19:契約内容A 20:契約内容B   
+#  21:契約内容C  22:契約内容D  23:契約内容E 24:契約内容F 25:契約内容G   
+#  26:契約内容H  27:契約内容I  28:契約内容J 29:契約内容K 30:契約内容L   
+#  31:契約内容M  32:契約内容N  33:削除F     34:更新日時
+  cat                     > $tmp-lv1
+ERROR_CHECK
+
+	# LV1ディレクトリ作成
+	mkdir -p $lv1d/PL_DATA/"$today"
+ERROR_CHECK
+
+	# LV1へ保存
+	mv $tmp-lv1 $lv1d/PL_DATA/"$today"/PL_DATA_"$todayhms"_$$
+ERROR_CHECK
+
+	# 整理バッチ
+	$sysd/DATAMASTER.PL_DATA $today 1> /dev/null 2> /dev/null
+ERROR_CHECK
+else
+	:
+fi
+
+# 送信情報作成
+if [ $(cat $tmp-error_list) == "_" ]; then
+	echo -n "no_error"
+else
+	echo -n "exist_error"
+fi                       > $tmp-ajax
+
+##################################################
+# 作成情報送信
+echo "Content-type:text/html"
+echo
+cat $tmp-ajax
+
+#################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0

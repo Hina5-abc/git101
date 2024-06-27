@@ -1,0 +1,117 @@
+#!/usr/bin/bash -vx
+#
+# KOSHORIREKI.GYOPLUS.AJAX
+#
+# 契約台帳 交渉履歴 行追加  AJAX
+#
+# 作成者: h-kato@usp-lab.com
+# 作成日: 2022/09/19
+#
+##################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+##################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv3d=$homd/DATA/LV3
+comd=$homd/APP/COMMON/HTML
+tbld=/$homd/TBL
+tmp=/tmp/tmp-$$
+
+todayhms=$(date +%Y%m%d%H%M%S)
+
+##################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+##################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+##################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"             |
+	cgi-name -n_ -s_                    |
+	cat                                 > $tmp-name
+ERROR_CHECK
+else
+	:                                   > $tmp-name
+ERROR_CHECK
+fi
+##################################################
+# アプリケーション由来情報の取得
+kaisha=$(nameread 会社CD $tmp-name)
+tenpo=$(nameread 店舗CD $tmp-name)
+kanri=$(nameread 管理CD $tmp-name)
+
+# 表示情報の作成
+cat $tmp-name                                                  |
+name-tag                                                       |
+tagself 交渉履歴No 交渉履歴日付 交渉履歴内容 交渉履歴登録日時 交渉履歴登録No  |
+#  1:交渉履歴No 2:交渉履歴日付 3:交渉履歴内容 4:交渉履歴登録日時 5:交渉履歴登録No
+sed 1d                                                         |
+# 日付、内容が空白のものを除去
+cond '$2 =! "_" && $3 != "_"'                                    |
+self 2/5                                                       |
+#  1:交渉履歴日付 2:交渉履歴内容 3:交渉履歴登録日時 4:交渉履歴登録No
+cat                                                            > $tmp-check_data
+ERROR_CHECK
+
+# 追加用フィールド作成
+echo "_"   |
+ransu 3    |
+cat        > $tmp-plus_gyo
+ERROR_CHECK
+
+if [ -s $tmp-check_data ]; then
+        # 追加データ作成
+        echo "_ _ _ _"          |
+        #  1:交渉履歴日付 2:交渉履歴内容 3:交渉履歴登録日時 4:交渉履歴登録No
+        # 現在表示分とマージ
+        ucat $tmp-check_data -  |
+        msort key=3/4           |
+        cat - $tmp-plsu_gyo     |
+        juni                    |
+        #  1:No  2:交渉履歴日付 3:交渉履歴内容 4:交渉履歴登録日時 5:交渉履歴登録No
+        cat                     > $tmp-data
+        ERROR_CHECK
+else
+        cat $tmp-check_data     |
+        cat - $tmp-plsu_gyo     |
+        juni                    |
+        cat                     > $tmp-data
+        ERROR_CHECK
+fi
+
+# 送信情報の作成
+cat $htmd/KEIYAKU_DAICHO.HTML                        |
+sed -n '/###交渉履歴関係###/,/###交渉履歴関係###/p'  |
+mojihame -l###交渉履歴情報### - $tmp-data            |
+cat                                                  > $tmp-ajax
+ERROR_CHECK
+
+##################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+cat $tmp-ajax
+
+#################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0

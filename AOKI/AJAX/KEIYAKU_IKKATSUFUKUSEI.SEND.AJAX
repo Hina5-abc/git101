@@ -1,0 +1,330 @@
+#!/usr/bin/bash -vx
+############################################################
+#
+# KEIYAKU_IKKATSUFUKUSEI.SEND.AJAX
+#
+# 契約一括複製 登録AJAX
+#
+# 作成者: t-kaida@usp-lab.com
+# 作成日: 2022/11/09
+#
+############################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+############################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv1d=$homd/DATA/LV1
+lv3d=$homd/DATA/LV3
+tbld=$homd/TBL
+sysd=$homd/SYS
+comd=$homd/APP/COMMON/HTML
+tmp=/tmp/tmp-$(basename $0).$(date +'%Y%m%d_%H%M%S').$$
+
+today=$(date +%Y%m%d)
+todayhms=$(date +%Y%m%d%H%M%S)
+
+############################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+############################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+############################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+        dd bs="$CONTENT_LENGTH"	|
+        cgi-name -n_ -s_        |
+        cat                     > $tmp-name
+        ERROR_CHECK
+else
+        :                       > $tmp-name
+        ERROR_CHECK
+fi
+
+############################################################
+
+#*******************************************************************************
+# 複製情報の取得
+#*******************************************************************************
+cat $tmp-name	|
+name-tag      |
+tagself 旧会社検索 旧店舗コード検索 旧契約コード番号検索 旧オーナーコード検索 旧オーナーコード枝番検索	\
+				新会社検索 新店舗コード検索 新契約コード番号検索 新オーナーコード検索 新オーナーコード枝番検索 	|
+#
+#  1.旧会社 2.旧店舗コード 3.旧管理番号 4.旧オーナーコード 5.旧オーナーコード枝番
+#  6.新会社 7.新店舗コード 8.新管理番号 9.新オーナーコード 10.新オーナーコード枝番
+
+sed 1d				| # ヘッダー排除
+cat -					> $tmp-shinkyu_data
+
+#*******************************************************************************
+# 各情報の複製データ作成
+#*******************************************************************************
+#----------------------------------------
+# 契約管理情報
+#----------------------------------------
+cat $lv3d/KEIYAKU/KEIYAKU								|
+#
+#  1:ID                2:会社              3:店舗コード         4:管理番号          5:業態
+#  6:使用状態          7:担当者            8:オーナーCD         9:オーナーCD_枝番   10:契約先
+#  11:個人法人区分     12:契約名称         13:賃貸借関係        14:契約種類         15:物件名
+#  16:OPEN日           17:契約日           18:契約期間開始日    19:原契約期間満了日 20:契約期間満了日
+#  21:次回改定日       22:改定条件         23:更新条件          24:更新予告         25:更新手数料
+#  26:自動更新         27:解約予告         28:解約条件          29:明渡条件         30:契約敷地面積
+#  31:契約敷地合計     32:契約延床面積     33:契約先コード      34:契約住所         35:都道府県名
+#  36:摘要             37:交渉履歴         38:主キー項目        39:オーナーCD2      40:オーナーCD枝番2
+#  41:オーナーCD2解約F 42:オーナーCD3      43:オーナーCD枝番3   44:オーナーCD3解約F 45:オーナーCD4
+#  46:オーナーCD枝番4  47:オーナーCD4解約F 48:オーナーCD5       49:オーナーCD枝番5  50:オーナーCD5解約F
+#  51:オーナーCD6      52:オーナーCD枝番6  53:オーナーCD6解約F  54:オーナーCD7      55:オーナーCD枝番7
+#  56:オーナーCD7解約F 57:オーナーCD8      58:オーナーCD枝番8   59:オーナーCD8解約F 60:オーナーCD9
+#  61:オーナーCD枝番9  62:オーナーCD9解約F 63:オーナーCD10      64:オーナーCD枝番10 65:オーナーCD10解約F
+#  66:オーナーCD11     67:オーナーCD枝番11 68:オーナーCD11解約F 69:削除F            70:更新日時
+
+self 0 2 3 4														| 
+cjoin1 key=NF-2/NF $tmp-shinkyu_data -	| # 新情報を末尾に追加 
+self 1 76/78 5/7 79/80 10/NF-10					| # キー項目を新情報に入替
+cat - > $tmp-keiyaku_fukusei_tmp
+
+# オーナーマスタから契約先名を取得
+keiyakusaki=$(cat $tmp-keiyaku_fukusei_tmp	|
+	self 2 8 9 																|
+	cjoin1 key=1/3 <(cat $lv3d/OWNER_MASTER/OWNER_MASTER | self 2 3 4 5 7 | msort key=1/3) - |
+	awk '{$4!="_"?$6=$4:$6=$5;print}' 				|
+	delf 1/5
+)
+
+if [ -s $tmp-keiyaku_fukusei_tmp ];then
+	getno 1 $tbld/GETNO/KEIYAKU						| # 新IDを採番
+	ycat - $tmp-keiyaku_fukusei_tmp				| # 新IDを追加 
+	delf 2																| # 旧IDを削除
+	strcat 1/9 \"$keiyakusaki\" 11/NF			| # 契約先を新オーナーに置換
+	strcat 0 \"$todayhms\"             		| # 新更新日時を追加
+	delf NF-1															| # 旧更新日時を削除
+	cat - > $tmp-keiyaku_fukusei
+	ERROR_CHECK
+else
+	: > $tmp-keiyaku_fukusei 
+	ERROR_CHECK
+fi
+
+#----------------------------------------
+# 交渉履歴 
+#----------------------------------------
+cat $lv3d/KOSHORIREKI/KOSHORIREKI				|
+#
+#  1:会社CD   2:店舗CD 3:管理番号 4:交渉履歴日付 5:内容
+#  6:登録日時 7:登録No 8:削除F    9:更新日時
+
+self 0 1 2 3 														| 
+cjoin1 key=NF-2/NF $tmp-shinkyu_data -	| # 新情報を末尾に追加 
+self 15/17 4/NF-10											| # キー項目を新情報に入替
+cat - > $tmp-koshorireki_fukusei_tmp
+
+if [ -s $tmp-koshorireki_fukusei_tmp ];then
+	cat $tmp-koshorireki_fukusei_tmp			|
+	strcat 0 \"$todayhms\"             		| # 新更新日時を追加
+	delf NF-1															| # 旧更新日時を削除
+	cat - > $tmp-koshorireki_fukusei
+	ERROR_CHECK
+else
+	: > $tmp-koshorireki_fukusei
+	ERROR_CHECK
+fi
+
+#----------------------------------------
+# 修繕工事関係 
+#----------------------------------------
+cat $lv3d/SHUZENKOJI/SHUZENKOJI					|
+#
+#  1:会社CD   2:店舗CD 3:管理番号 4:修繕工事日付 5:内容
+#  6:登録日時 7:登録No 8:削除     9:更新日時
+
+self 0 1 2 3 														| 
+cjoin1 key=NF-2/NF $tmp-shinkyu_data -	| # 新情報を末尾に追加 
+self 15/17 4/NF-10											| # キー項目を新情報に入替
+cat - > $tmp-shuzenkoji_fukusei_tmp
+
+if [ -s $tmp-shuzenkoji_fukusei_tmp ];then
+	cat $tmp-shuzenkoji_fukusei_tmp			|
+	strcat 0 \"$todayhms\"             		| # 新更新日時を追加
+	delf NF-1															| # 旧更新日時を削除
+	cat - > $tmp-shuzenkoji_fukusei
+	ERROR_CHECK
+else
+	: > $tmp-shuzenkoji_fukusei
+	ERROR_CHECK
+fi
+
+#----------------------------------------
+# 賃料改定履歴
+#----------------------------------------
+cat $lv3d/CHINRYOKAITE/CHINRYOKAITE			|
+#
+#  1:会社      2:店舗コード  3:管理番号  4:更新日      5:契約先
+#  6:契約名称  7:賃料        8:管理費    9::駐車料      10:その他
+#  11:消費税   12:消費税区分 13:相殺額   14:月額支払額 15:改定内容
+#  16:支払方法 17:歩合       18:削除F    19:更新日時
+
+self 0 1 2 3 														| 
+cjoin1 key=NF-2/NF $tmp-shinkyu_data -	| # 新情報を末尾に追加 
+self 25/27 4/NF-10											| # キー項目を新情報に入替
+cat - > $tmp-chinryokaite_fukusei_tmp
+
+if [ -s $tmp-chinryokaite_fukusei_tmp ];then
+	cat $tmp-chinryokaite_fukusei_tmp			|
+	strcat 0 \"$todayhms\"             		| # 新更新日時を追加
+	delf NF-1															| # 旧更新日時を削除
+	cat - > $tmp-chinryokaite_fukusei
+	ERROR_CHECK
+else
+	: > $tmp-chinryokaite_fukusei
+	ERROR_CHECK
+fi
+
+#----------------------------------------
+# 敷金保証金建設協力金情報
+#----------------------------------------
+cat $lv3d/SHIKIHO/SHIKIHO								|
+#
+#  1:ID          2:会社             3:店舗コード       4:管理番号  5:契約先
+#  6:契約名称    7:敷金保証金区分   8:建設協力金番号   9:番号      10:金額_円
+#  11:返済条件   12:返済期間_開始日 13:返済期間_終了日 14:償還条件 15:初回方法
+#  16:初回償還額 17:定期方法        18:定期償還額      19:最終方法 20:最終償還額
+#  21:削除F      22:更新日時
+
+self 0 2 3 4                            |
+cjoin1 key=NF-2/NF $tmp-shinkyu_data -  | # 新情報を末尾に追加
+self 1 28/30 5/NF-10         						| # キー項目を新情報に入替
+cat - > $tmp-shikiho_fukusei_tmp
+
+if [ -s $tmp-shikiho_fukusei_tmp ];then
+	gyosu=$(gyo $tmp-shikiho_fukusei_tmp)	  # 行数取得
+  getno $gyosu $tbld/GETNO/SHIKIHO      | # 新IDを採番
+  ycat - $tmp-shikiho_fukusei_tmp       | # 新IDを追加
+  delf 2                                | # 旧IDを削除
+  strcat 0 \"$todayhms\"                | # 新更新日時を追加
+  delf NF-1                             | # 旧更新日時を削除
+  cat - > $tmp-shikiho_fukusei
+  ERROR_CHECK
+else
+  : > $tmp-shikiho_fukusei
+  ERROR_CHECK
+fi
+
+#*******************************************************************************
+# 各情報の複製データ反映
+#*******************************************************************************
+#----------------------------------------
+# 契約管理情報
+#----------------------------------------
+if [ -s $tmp-keiyaku_fukusei ];then
+		# LV1ディレクトリ作成
+		mkdir -p $lv1d/KEIYAKU/"$today"
+		ERROR_CHECK
+
+		# LV1へ保存
+		mv $tmp-keiyaku_fukusei $lv1d/KEIYAKU/"$today"/KEIYAKU_"$todayhms"_$$
+		ERROR_CHECK
+
+		# 整理バッチ
+		$sysd/DATAMASTER.KEIYAKU $today 1> /dev/null 2> /dev/null
+		ERROR_CHECK
+fi
+
+#----------------------------------------
+# 交渉履歴
+#----------------------------------------
+if [ -s $tmp-koshorireki_fukusei ];then
+    # LV1ディレクトリ作成
+    mkdir -p $lv1d/KOSHORIREKI/"$today"
+		ERROR_CHECK
+
+    # LV1へ保存
+    mv $tmp-koshorireki_fukusei $lv1d/KOSHORIREKI/"$today"/KOSHORIREKI_"$todayhms"_$$
+		ERROR_CHECK
+
+    # 整理バッチ
+    $sysd/DATAMASTER.KOSHORIREKI $today 1> /dev/null 2> /dev/null
+		ERROR_CHECK
+fi
+
+#----------------------------------------
+# 修繕・工事関係
+#----------------------------------------
+if [ -s $tmp-shuzenkoji_fukusei ];then
+    # LV1ディレクトリ作成
+    mkdir -p $lv1d/SHUZENKOJI/"$today"
+		ERROR_CHECK
+
+    # LV1へ保存
+    mv $tmp-shuzenkoji_fukusei $lv1d/SHUZENKOJI/"$today"/SHUZENKOJI_"$todayhms"_$$
+		ERROR_CHECK
+
+    # 整理バッチ
+    $sysd/DATAMASTER.SHUZENKOJI $today 1> /dev/null 2> /dev/null
+		ERROR_CHECK
+fi
+
+#----------------------------------------
+# 賃料改定履歴
+#----------------------------------------
+if [ -s $tmp-chinryokaite_fukusei ];then
+      # ディレクトリ作成
+      mkdir -p $lv1d/CHINRYOKAITE/$today
+		  ERROR_CHECK
+
+      # LV1へ登録
+      mv $tmp-chinryokaite_fukusei $lv1d/CHINRYOKAITE/$today/CHINRYOKAITE_"$todayhms"_$$
+	  	ERROR_CHECK
+
+      # 整理バッチ
+      $sysd/DATAMASTER.CHINRYOKAITE $today 1> /dev/null 2> /dev/null
+  		ERROR_CHECK
+fi
+
+#----------------------------------------
+# 敷金保証金建設協力金情報
+#----------------------------------------
+if [ -s $tmp-shikiho_fukusei ];then
+
+			# ディレクトリ作成
+			mkdir -p $lv1d/SHIKIHO/$today
+			ERROR_CHECK
+			
+			# LV1へ登録
+			mv $tmp-shikiho_fukusei $lv1d/SHIKIHO/$today/SHIKIHO_"$todayhms"_$$
+			ERROR_CHECK
+			
+			# 整理バッチ
+			$sysd/DATAMASTER.SHIKIHO $today 1> /dev/null 2> /dev/null
+			ERROR_CHECK
+fi
+
+############################################################
+# 作成情報送信
+echo "Content-type:text/html"
+echo
+echo -n "ok"
+
+############################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0
+

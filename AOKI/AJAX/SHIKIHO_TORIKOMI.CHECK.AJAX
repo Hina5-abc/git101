@@ -1,0 +1,141 @@
+#!/usr/bin/bash -vx
+#
+# SHIKIHO_TORIKOMI.CHECK.AJAX
+#
+# 敷金保証金建設協力金 取込 チェック AJAX
+#
+# 作成者: h-kato@usp-lab.com
+# 作成日: 2022/09/15
+#
+##################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+##################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv3d=$homd/DATA/LV3
+comd=$homd/APP/COMMON/HTML
+tmp=/tmp/tmp-$$
+
+# 変数指定
+today=$(date +%Y%m%d)
+todayym=$(date +%Y%m)
+
+##################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+##################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+##################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"             |
+	cat                                 > $tmp-mime
+ERROR_CHECK
+else
+	:                                   > $tmp-mime
+ERROR_CHECK
+fi
+
+##################################################
+# メインプロセス
+
+# 会社情報を取得
+kaisha=$(mime-read "会社" $tmp-mime)
+
+# エラーファイル初期化
+: > $tmp-error
+
+# ヘッダー情報チェック
+msort key=1 << FIN > $tmp-header_check
+会社
+会社名
+契約番号・親
+賃借契約
+契約先
+契約先名称
+店舗
+店舗名称
+基幹部門
+基幹部門名称
+保証金(総額)
+敷金(総額)
+建設協力金(総額)
+保証金(残高)
+敷金(残高)
+建設協力金(残高)
+契約種類
+契約種類名称
+建協金区分
+建協金区分名称
+返済条件
+返済条件名称
+初回償還
+初回償還名称
+定期償還
+定期償還名称
+最終償還
+最終償還名称
+帳票ID
+出力時間
+FIN
+
+mime-read "取込ファイル" $tmp-mime                     |
+fromcsv                                                |
+uconv -stou                                            |
+tee $tmp-csv                                           |
+atama -n1                                              |
+tarr                                                   |
+msort key=1                                            |
+cjoin1 +ng3 key=1 $tmp-header_check - >/dev/null 3>>$tmp-error
+ERROR_CHECK
+
+# 第一レコードの値をチェック
+echo $kaisha                    |
+fsed 's/001/1/1' 's/002/AOK/1'  |
+cat                             > $tmp-kaisha
+ERROR_CHECK
+
+cat $tmp-csv                    |
+tagself "会社"                  |
+sed 1d                          |
+lineup 1                        |
+cjoin1 +ng3 key=1 $tmp-kaisha - >/dev/null 3>>$tmp-error
+ERROR_CHECK
+
+# 送信ファイルの作成
+if [ -s $tmp-error ];then
+	echo "【取込エラー】ファイル内容が不正です" > $tmp-ajax
+ERROR_CHECK
+else
+	echo -n "ok"    > $tmp-ajax
+ERROR_CHECK
+fi
+
+##################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+cat $tmp-ajax
+
+#################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0

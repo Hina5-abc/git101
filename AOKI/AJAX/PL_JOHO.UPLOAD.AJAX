@@ -1,0 +1,396 @@
+#!/usr/bin/bash -vx
+#
+# PL_JOHO.UPLOAD.AJAX
+#
+# PL成功 ファイルアップロード実行 AJAX
+#
+# 作成者: h-kato@usp-lab.com
+# 作成日: 2022/11/15
+#
+##################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+##################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+tbld=$homd/TBL
+sysd=$homd/SYS
+lv1d=$homd/DATA/LV1
+lv2d=$homd/DATA/LV2
+lv3d=$homd/DATA/LV3
+sesd=$homd/SESSION
+lv4d=$apld/LV4
+comd=$homd/APP/COMMON/HTML
+tpld=$apld/TEMPLATE
+tmp=/tmp/tmp-$$
+
+today=$(date +%Y%m%d)
+todayhms=$(date +%Y%m%d%H%M%S)
+##################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+##################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+##################################################
+# セッション確認
+echo $HTTP_COOKIE                                             |
+sed 's/; */\n/g'                                              |
+sed -n 's/=/ /p'                                              |
+cat                                                           > $tmp-cookie
+ERROR_CHECK
+
+session=$(nameread KEY $tmp-cookie)
+
+check_session $session                                        > $tmp-session_check
+ERROR_CHECK
+
+# セッションがない場合、ログイン画面へ遷移
+if [ ! -s $tmp-session_check ];then
+	cat $comd/GOTOURL.HTML                                       |
+	calsed "###URL###" "../../COMMON/CGI/LOGIN.CGI"              |
+	cat                                                          > $tmp-html
+ERROR_CHECK
+	
+	# HTML表示
+	echo "Content-type:text/html"
+	echo
+	cat $tmp-html
+ERROR_CHECK
+
+	rm -rf $tmp-*
+	exit 0
+fi
+
+# user情報
+user=$(selr 1 "user" $sesd/SESSION.$session | self 2)
+user_name=$(selr 1 "$user" $lv3d/TBL/USER_USERNAME | self 2)
+user_kaisha=$(selr 1 "$user" $lv3d/USER_MASTER/USER_MASTER | self 4)
+user_permit=$(selr 1 "$user" $lv3d/USER_MASTER/USER_MASTER | self 5)
+
+##################################################
+# ユーザ権限チェック
+if [ "$user_permit" == "01" ]; then
+	:
+else
+	echo "Content-type:text/html"
+	echo ""
+	cat $comd/GOTOURL.HTML                          |
+	calsed "###URL###" "../../COMMON/CGI/LOGIN.CGI" |
+	cat
+	rm -rf $tmp-*
+	exit 0
+fi
+
+
+##################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"                       |
+	cat                                           > $tmp-name
+ERROR_CHECK
+else
+	:                                             > $tmp-name
+ERROR_CHECK
+fi
+
+##################################################
+# アップロードファイル取得
+mime-read 更新ファイル $tmp-name > $tmp-upload_file
+ERROR_CHECK
+
+# 結果ダウンロードファイル名
+file_name="PL_JOHO.UPLOAD.RESULT_${todayhms}_$$.xlsx"
+
+# ヘッダー作成
+yarr <<FIN > $tmp-header
+NO        会社         店舗CD     店舗名     会計年度 
+区分      売上高       売上原価   経準率     経準高   
+販売費    人件費       営業活動費 設備活動費 一般費   
+経費合計  営業貢献利益 営業利益   経常利益   投資回収 
+契約内容A 契約内容B    契約内容C  契約内容D  契約内容E
+契約内容F 契約内容G    契約内容H  契約内容I  契約内容J
+契約内容K 契約内容L    契約内容M  契約内容N 
+FIN
+
+#  1:会社          2:店舗CD      3:店舗名      4:会計年度      5:区分      
+#  6:売上高        7:売上原価    8:経準率      9:経準高        10:販売費   
+#  11:人件費       12:営業活動費 13:設備活動費 14:一般費       15:経費合計 
+#  16:営業貢献利益 17:営業利益   18:経常利益   19:投資回収     20:契約内容A
+#  21:契約内容B    22:契約内容C  23:契約内容D  24:契約内容E    25:契約内容F
+#  26:契約内容G    27:契約内容H  28:契約内容I  29:契約内容J    30:契約内容K
+#  31:契約内容L    32:契約内容M  33:契約内容N  34:(エラー内容)
+rex 1 $tmp-upload_file |
+# ヘッダー削除
+sed -e "1,2d"          |
+delf 34                |
+juni                   |
+#  1:NO         2:会社          3:店舗CD      4:店舗名      5:会計年度  
+#  6:区分       7:売上高        8:売上原価    9:経準率      10:経準高   
+#  11:販売費    12:人件費       13:営業活動費 14:設備活動費 15:一般費   
+#  16:経費合計  17:営業貢献利益 18:営業利益   19:経常利益   20:投資回収 
+#  21:契約内容A 22:契約内容B    23:契約内容C  24:契約内容D  25:契約内容E
+#  26:契約内容F 27:契約内容G    28:契約内容H  29:契約内容I  30:契約内容J
+#  31:契約内容K 32:契約内容L    33:契約内容M  34:契約内容N 
+tee $tmp-koshin_data   |
+# ヘッダー連結
+cat $tmp-header -      |
+cat                    > $tmp-tag_data
+ERROR_CHECK
+
+# エラーファイルの初期化
+:> $tmp-error
+
+if [ -s $tmp-koshin_data ];then
+	## 必須項目のチェック
+	cat <<-FIN > $tmp-check_need
+	会社
+	店舗CD
+	会計年度
+	区分
+	FIN
+
+	cktag_need $tmp-check_need $tmp-tag_data 2>$tmp-need_error >/dev/null
+	if [ $? -ne 0 ]; then
+		cat $tmp-need_error          |
+		strcat 1 2+\"は必須項目です\" >> $tmp-error
+		ERROR_CHECK
+	fi
+
+	## 属性チェック
+	self 1/NF <<- FIN > $tmp-check_attr
+	会計年度 N4
+	FIN
+
+	cat $tmp-check_attr > /tmp/check
+	cat $tmp-tag_data > /tmp/tag_data
+
+	cktag_attr $tmp-check_attr $tmp-tag_data 3>&1 >/dev/null |
+	sed 1d                                                   |
+	cat                                                      > $tmp-attr_error
+	ERROR_CHECK
+
+	if [ -s $tmp-attr_error ]; then
+		cat $tmp-attr_error                            |
+		strcat 1 \"会計年度は整数４桁を指定してください。\" >> $tmp-error
+		ERROR_CHECK
+	fi
+
+	## マスタ存在チェック
+	# 会社、店舗CDが存在するかチェック
+	lineup 2 4 $lv3d/TENPO_MASTER/TENPO_MASTER > $tmp-tenpo_master
+	#  1:会社 2:店舗CD
+	ERROR_CHECK
+
+#  1:NO         2:会社          3:店舗CD      4:店舗名      5:会計年度  
+#  6:区分       7:売上高        8:売上原価    9:経準率      10:経準高   
+#  11:販売費    12:人件費       13:営業活動費 14:設備活動費 15:一般費   
+#  16:経費合計  17:営業貢献利益 18:営業利益   19:経常利益   20:投資回収 
+#  21:契約内容A 22:契約内容B    23:契約内容C  24:契約内容D  25:契約内容E
+#  26:契約内容F 27:契約内容G    28:契約内容H  29:契約内容I  30:契約内容J
+#  31:契約内容K 32:契約内容L    33:契約内容M  34:契約内容N 
+  cat $tmp-koshin_data                                    |
+	self 2 3 1                                              |
+  #  1:会社 2:店舗CD 3:NO
+	# 会社名をコード変換
+	cjoin2 key=1 <(lineup 2 1 $lv3d/TBL/KAISHA_NAME)        |
+	delf 1                                                  |
+  msort key=1/2                                           |
+  cjoin1 +ng3 key=1/2 $tmp-tenpo_master 3>&1 1>/dev/null  |
+  # 会社名を連結
+  cjoin2 key=1 $lv3d/TBL/KAISHA_NAME                      |
+  delf 1 3                                                |
+  #  1:会社名 2:店舗CD 3:NO
+  cat                                                     > $tmp-inlist_error
+	ERROR_CHECK
+
+	if [ -s $tmp-inlist_error ]; then
+		cat $tmp-inlist_error                             |
+		strcat 3 \"会社、店舗CDがマスタに存在しません\"  >> $tmp-error
+		ERROR_CHECK
+	fi
+
+	## 会社、店舗CD、会計年度、区分の重複チェック
+#  1:NO         2:会社          3:店舗CD      4:店舗名      5:会計年度  
+#  6:区分       7:売上高        8:売上原価    9:経準率      10:経準高   
+#  11:販売費    12:人件費       13:営業活動費 14:設備活動費 15:一般費   
+#  16:経費合計  17:営業貢献利益 18:営業利益   19:経常利益   20:投資回収 
+#  21:契約内容A 22:契約内容B    23:契約内容C  24:契約内容D  25:契約内容E
+#  26:契約内容F 27:契約内容G    28:契約内容H  29:契約内容I  30:契約内容J
+#  31:契約内容K 32:契約内容L    33:契約内容M  34:契約内容N 
+	cat $tmp-tag_data               |
+	tagself 会社 店舗CD 会計年度 区分 NO |
+	#  1:会社 2:店舗CD 3:会計年度 4:区分 5:NO
+	# ヘッダー排除
+	sed 1d                          |
+	msort key=1/4                   |
+	yarr num=4                      |
+	uawk 'NF!=5'                    |
+	yarr -1 num=4                   |
+	#  1:会社 2:店舗CD 3:会計年度 4:区分 5:NO
+	cat                             > $tmp-chofuku_error
+	ERROR_CHECK
+	
+	if [ -s $tmp-chofuku_error ];then
+		cat $tmp-chofuku_error                  |
+		strcat 5 \"会社、店舗コード、会計年度、区分が重複しています\" |
+		cat                                    >> $tmp-error
+	ERROR_CHECK
+	fi
+fi
+
+# アップロード結果を作成
+if [ -s $tmp-error ];then
+        cat $tmp-error                             |
+        msort key=1                                |
+        yarr -d, num=1                             |
+        #  1:No 2:エラー内容
+        cjoin2 key=1 - $tmp-koshin_data            |
+#  1:NO         2:エラー内容 3:会社          4:店舗CD      5:店舗名     
+#  6:会計年度   7:区分       8:売上高        9:売上原価    10:経準率    
+#  11:経準高    12:販売費    13:人件費       14:営業活動費 15:設備活動費
+#  16:一般費    17:経費合計  18:営業貢献利益 19:営業利益   20:経常利益  
+#  21:投資回収  22:契約内容A 23:契約内容B    24:契約内容C  25:契約内容D 
+#  26:契約内容E 27:契約内容F 28:契約内容G    29:契約内容H  30:契約内容I 
+#  31:契約内容J 32:契約内容K 33:契約内容L    34:契約内容M  35:契約内容N 
+        self 1 3/NF 2
+else
+        ucat $tmp-koshin_data                      |
+        strcat 0 \"_\"
+fi                                                 |
+#  1:NO         2:会社          3:店舗CD      4:店舗名      5:会計年度   
+#  6:区分       7:売上高        8:売上原価    9:経準率      10:経準高    
+#  11:販売費    12:人件費       13:営業活動費 14:設備活動費 15:一般費    
+#  16:経費合計  17:営業貢献利益 18:営業利益   19:経常利益   20:投資回収  
+#  21:契約内容A 22:契約内容B    23:契約内容C  24:契約内容D  25:契約内容E 
+#  26:契約内容F 27:契約内容G    28:契約内容H  29:契約内容I  30:契約内容J 
+#  31:契約内容K 32:契約内容L    33:契約内容M  34:契約内容N  35:エラー内容
+tee $tmp-send_data_check                           |
+# 正常データのエラー内容を書き換え
+fsed 's/_/取込完了/35'                             |
+# 会社コードを取得
+cjoin2 key=2 <(cat $lv3d/TBL/KAISHA_NAME | lineup 2 1) -  |
+#  1:NO          2:会社       3:会社CD        4:店舗CD      5:店舗名     
+#  6:会計年度    7:区分       8:売上高        9:売上原価    10:経準率    
+#  11:経準高     12:販売費    13:人件費       14:営業活動費 15:設備活動費
+#  16:一般費     17:経費合計  18:営業貢献利益 19:営業利益   20:経常利益  
+#  21:投資回収   22:契約内容A 23:契約内容B    24:契約内容C  25:契約内容D 
+#  26:契約内容E  27:契約内容F 28:契約内容G    29:契約内容H  30:契約内容I 
+#  31:契約内容J  32:契約内容K 33:契約内容L    34:契約内容M  35:契約内容N 
+#  36:エラー内容
+# 店舗名を連結
+self 0 3 4                                         |
+cjoin2 key=NF-1/NF $lv3d/TBL/KAISHA_TENPOCO_NAME   |
+#  1:NO          2:会社       3:会社CD        4:店舗CD      5:店舗名     
+#  6:会計年度    7:区分       8:売上高        9:売上原価    10:経準率    
+#  11:経準高     12:販売費    13:人件費       14:営業活動費 15:設備活動費
+#  16:一般費     17:経費合計  18:営業貢献利益 19:営業利益   20:経常利益  
+#  21:投資回収   22:契約内容A 23:契約内容B    24:契約内容C  25:契約内容D 
+#  26:契約内容E  27:契約内容F 28:契約内容G    29:契約内容H  30:契約内容I 
+#  31:契約内容J  32:契約内容K 33:契約内容L    34:契約内容M  35:契約内容N 
+#  36:エラー内容 37:会社CD    38:店舗CD       39:店舗名
+msort key=3/4@6/7                                     |
+self 2 4 39 6/36		  |
+#  1:会社          2:店舗CD      3:店舗名      4:会計度      5:区分
+#  6:売上高        7:売上原価    8:経準率      9:経準高      10:販売費
+#  11:人件費       12:営業活動費 13:設備活動費 14:一般費     15:経費合計
+#  16:営業貢献利益 17:営業利益   18:経常利益   19:投資回収   20:契約内容_A
+#  21:契約内容_B   22:契約内容_C 23:契約内容_D 24:契約内容_E 25:契約内容_F
+#  26:契約内容_G   27:契約内容_H 28:契約内容_I 29:契約内容_J 30:契約内容_K
+#  31:契約内容_L   32:契約内容_M 33:契約内容_N 34:エラー内容
+# 数字を文字列認識させるためシングルクオートを追加
+strcat -e 1 \"\'\"+2 3/NF                        |
+# エラーリストをLV4へ保存し、画面よりダウンロード可能にする
+wex -s_ $tpld/PL_JOHO.xlsx PL情報 A3 -    |
+cat                                                > $lv4d/$file_name
+ERROR_CHECK
+
+## 正常データ登録処理
+#  1:NO         2:会社          3:店舗CD      4:店舗名      5:会計年度   
+#  6:区分       7:売上高        8:売上原価    9:経準率      10:経準高    
+#  11:販売費    12:人件費       13:営業活動費 14:設備活動費 15:一般費    
+#  16:経費合計  17:営業貢献利益 18:営業利益   19:経常利益   20:投資回収  
+#  21:契約内容A 22:契約内容B    23:契約内容C  24:契約内容D  25:契約内容E 
+#  26:契約内容F 27:契約内容G    28:契約内容H  29:契約内容I  30:契約内容J 
+#  31:契約内容K 32:契約内容L    33:契約内容M  34:契約内容N  35:エラー内容
+ucat $tmp-send_data_check                                 |
+# 正常データのみ取得
+selr 35 "_"                                                |
+# 文字列をコード変換
+# 会社
+cjoin2 key=2 <(cat $lv3d/TBL/KAISHA_NAME | lineup 2 1) -  |
+delf 2                                                    |
+cat                                                       > $tmp-send_data
+ERROR_CHECK
+
+# 登録データが存在する場合
+if [ -s $tmp-send_data ];then
+	
+	# 登録情報の作成
+#  1:NO         2:会社CD        3:店舗CD      4:店舗名      5:会計年度   
+#  6:区分       7:売上高        8:売上原価    9:経準率      10:経準高    
+#  11:販売費    12:人件費       13:営業活動費 14:設備活動費 15:一般費    
+#  16:経費合計  17:営業貢献利益 18:営業利益   19:経常利益   20:投資回収  
+#  21:契約内容A 22:契約内容B    23:契約内容C  24:契約内容D  25:契約内容E 
+#  26:契約内容F 27:契約内容G    28:契約内容H  29:契約内容I  30:契約内容J 
+#  31:契約内容K 32:契約内容L    33:契約内容M  34:契約内容N  35:エラー内容
+  cat $tmp-send_data                   |
+  strcat 2 3 5/34 \"0\" \"$todayhms\"  |
+#  1:会社        2:店舗CD      3:会計度      4:区分        5:売上高
+#  6:売上原価    7:経準率      8:経準高      9:販売費      10:人件費
+#  11:営業活動費 12:設備活動費 13:一般費     14:経費合計   15:営業貢献利益
+#  16:営業利益   17:経常利益   18:投資回収   19:契約内容_A 20:契約内容_B
+#  21:契約内容_C 22:契約内容_D 23:契約内容_E 24:契約内容_F 25:契約内容_G
+#  26:契約内容_H 27:契約内容_I 28:契約内容_J 29:契約内容_K 30:契約内容_L
+#  31:契約内容_M 32:契約内容_N 33:削除F      34:更新日時
+  msort key=1/4                        |
+	tee /tmp/lv1 |
+  cat                                  > $tmp-lv1
+	ERROR_CHECK
+	
+	# LV1ディレクトリ作成
+	mkdir -p $lv1d/PL_DATA/"$today"
+	ERROR_CHECK
+	   
+	# LV1へ保存
+	mv $tmp-lv1 $lv1d/PL_DATA/"$today"/PL_DATA_"$todayhms"_$$
+	ERROR_CHECK
+	   
+	# 整理バッチ
+	$sysd/DATAMASTER.PL_DATA $today 1> /dev/null 2> /dev/null
+	ERROR_CHECK
+else
+	:
+fi
+
+##################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+if [ -s $tmp-error ];then
+	echo "ng"
+else
+	echo "ok"
+fi
+echo -n $file_name
+
+#################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0

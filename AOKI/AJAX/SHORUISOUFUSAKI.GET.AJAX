@@ -1,0 +1,105 @@
+#!/usr/bin/bash -vx
+#
+# SHORUISOUFUSAKI.GET.AJAX
+#
+# 書類送付先によるオーナー情報取得 AJAX
+#
+# 作成者: h-kato@usp-lab.com
+# 作成日: 2022/10/05
+#
+##################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+##################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv3d=$homd/DATA/LV3
+comd=$homd/APP/COMMON/HTML
+tmp=/tmp/tmp-$$
+
+##################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+##################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+##################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"             |
+	cgi-name -n_ -s_                    |
+	cat                                 > $tmp-name
+ERROR_CHECK
+else
+	:                                   > $tmp-name
+ERROR_CHECK
+fi
+
+##################################################
+id=$(nameread ID $tmp-name)
+shoruisoufusaki=$(nameread 書類送付先 $tmp-name)
+
+# 書類送付先情報の取得
+#  1:ID                  2:会社名              3:オーナーCD           4:オーナーCD枝番        5:オーナー会社名
+#  6:役職名              7:氏名                8:郵便番号             9:住所_1                10:住所_2
+#  11:TEL                12:携帯               13:メールアドレス      14:オーナー備考欄               15:書類送付先
+#  16:連絡先関係         17:連絡先会社名       18:連絡先役職名        19:連絡先氏名           20:連絡先郵便番号
+#  21:連絡先住所_1       22:連絡先住所_2       23:連絡先TEL           24:連絡先携帯           25:連絡先メールアドレス
+#  26:お中元お歳暮会社名 27:お中元お歳暮役職名 28:お中元お歳暮氏名    29:お中元お歳暮郵便番号 30:お中元お歳暮住所_1
+#  31:お中元お歳暮住所_2 32:お中元お歳暮TEL    33:お中元お歳暮携帯    34:連絡先備考               35:契約種類
+#  36:契約先区分         37:お中元_お歳暮品目  38:お中元_お歳暮送付先 39:お中元備考           40:契約先コード
+#  41:県名               42:マイナンバー       43:事業者              44:摘要                 45:削除F
+#  46:更新日時
+cat $lv3d/OWNER_MASTER/OWNER_MASTER |
+# IDで絞り込み
+selr 1 $id |
+# 書類送付先で取得情報を切り分け
+if [ $shoruisoufusaki == "1" ]; then
+	# 直接
+elif [ $shoruisoufusaki == "2" ]; then
+	# 連絡先
+else
+fi
+cat > /tmp/a 
+ERROR_CHECK
+exit 0
+
+# 税区分の詳細取得
+cjoin2 +0 key=7 $lv3d/TBL/SHOHIZEI_KUBUN_NAME	  |
+#  1:賃料   2:管理費 3:駐車料 4:その他   5:消費税
+#  6:相殺額 7:税区分 8:税名称 9:内外区分 10:税率
+
+# 月額支払総額の計算
+lcalc '$9==01?$1+$2+$3+$4+$5-$6:$1+$2+$3+$4-$6'	|
+#  1:月額支払額
+# カンマ整形
+comma 1                                   |
+cat                                       > $tmp-shiharaigaku
+ERROR_CHECK
+
+##################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+cat $tmp-shiharaigaku
+
+#################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0

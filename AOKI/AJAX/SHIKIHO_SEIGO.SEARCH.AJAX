@@ -1,0 +1,174 @@
+#!/usr/bin/bash -vx
+#
+# SHIKIHO.SEARCH.AJAX
+#
+# 敷金保証金建設協力金情報 整合確認 検索 AJAX
+#
+# 作成者: h-kato@usp-lab.com
+# 作成日: 2022/08/30
+#
+##################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+##################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv3d=$homd/DATA/LV3
+comd=$homd/APP/COMMON/HTML
+tmp=/tmp/tmp-$$
+
+# 変数指定
+tmonth=$(date +%Y%m)
+##################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+##################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+##################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"             |
+	cgi-name -n_ -s_                    |
+	cat                                 > $tmp-name
+ERROR_CHECK
+else
+	:                                   > $tmp-name
+ERROR_CHECK
+fi
+
+##################################################
+# アプリケーション由来情報の取得
+kaisha=$(nameread 会社検索 $tmp-name)
+tenpo_start=$(nameread 店舗コード検索開始 $tmp-name)
+tenpo_end=$(nameread 店舗コード検索終了 $tmp-name)
+# 店舗開始のみ情報がある場合は、店舗開始と店舗終了に同一の店舗を与える
+[ "$tenpo_end" == "_" ] && tenpo_end=$tenpo_start
+keiyaku=$(nameread 全件表示 $tmp-name)
+# 検索マスタ　会社名
+cat $lv3d/TBL/KAISHA_NAME           |
+self 1 2                            |
+msort key=1/2                       >$tmp-kaisha_name
+ERROR_CHECK
+# 店舗マスタ　会社名＋店舗コード　
+cat $lv3d/TENPO_MASTER/TENPO_MASTER |
+self 2 4 7                          |
+msort key=1/2                       >$tmp-tenpo_name
+ERROR_CHECK
+# 敷金保証金区分　
+cat $lv3d/TBL/SHIKIHO_KUBUN_NAME    |
+self 1 2                            |
+msort key=1/2                       >$tmp-shikiho_kubun_name
+ERROR_CHECK
+# 契約情報の取得
+#  1:ID                2:会社              3:店舗コード         4:管理番号          5:業態
+#  6:使用状態          7:担当者            8:オーナーCD         9:オーナーCD_枝番   10:契約先
+#  11:個人法人区分     12:契約名称         13:賃貸借関係        14:契約種類         15:物件名
+#  16:OPEN日           17:契約日           18:契約期間開始日    19:原契約期間満了日 20:契約期間満了日
+#  21:次回改定日       22:改定条件         23:更新条件          24:更新予告         25:更新手数料
+#  26:自動更新         27:解約予告         28:解約条件          29:明渡条件         30:契約敷地面積
+#  31:契約敷地合計     32:契約延床面積     33:契約先コード      34:契約形態         35:都道府県名
+#  36:摘要             37:交渉履歴         38:主キー項目        39:オーナーCD2      40:オーナーCD枝番2
+#  41:オーナーCD2解約F 42:オーナーCD3      43:オーナーCD枝番3   44:オーナーCD3解約F 45:オーナーCD4
+#  46:オーナーCD枝番4  47:オーナーCD4解約F 48:オーナーCD5       49:オーナーCD枝番5  50:オーナーCD5解約F
+#  51:オーナーCD6      52:オーナーCD枝番6  53:オーナーCD6解約F  54:オーナーCD7      55:オーナーCD枝番7
+#  56:オーナーCD7解約F 57:オーナーCD8      58:オーナーCD枝番8   59:オーナーCD8解約F 60:オーナーCD9
+#  61:オーナーCD枝番9  62:オーナーCD9解約F 63:オーナーCD10      64:オーナーCD枝番10 65:オーナーCD10解約F
+#  66:オーナーCD11     67:オーナーCD枝番11 68:オーナーCD11解約F 69:削除F            70:更新日時
+cat $lv3d/KEIYAKU/KEIYAKU                     |
+selr --through "_" 2 "$kaisha"                |
+# 店舗開始検索
+if [ "$tenpo_start" == "_" ];then
+  cat
+else
+  uawk '$3>= "'$tenpo_start'"'
+fi                                            |
+# 店舗終了検索
+if [ "$tenpo_end" == "_" ];then
+  cat
+else
+  uawk '$3<= "'$tenpo_end'"'
+fi                                            |
+if [ "$keiyaku" == "no" ];then
+        delr 6 "007"
+else
+        cat
+fi                                            |
+self 1 2 3 4 10  33 15                        |
+msort key=2/4                                 >$tmp-keiyaku
+ERROR_CHECK
+# 1:ID           2:会社             3:店舗コード       4:管理番号              5:契約先
+# 6:契約先コード 7:物件名
+cat $lv3d/SHIKIHO/SHIKIHO                     |
+# 敷金保証金建設協力金情報を連結
+#  1:ID          2:会社             3:店舗コード       4:管理番号              5:契約先     
+#  6:契約種類    7:敷金保証金区分   8:建設協力金番号   9:建設協力金番号枝番   10:金額_円   
+#  11:返済条件   12:返済期間_開始日 13:返済期間_終了日 14:償還条件            15:初回方法  
+#  16:初回償還額 17:定期方法        18:定期償還額      19:最終方法            20:最終償還額
+#  21:削除F      22:更新日時       
+self 2 3 4 5 7 8 9                            |
+msort key=1/3                                 >$tmp-shikiho
+ERROR_CHECK
+#  1:会社        2:店舗コード       3:管理番号         4:契約先       5:敷金保証金区分
+#  6:建設協力金番号   7:建設協力金番号枝番
+join1 key=2/4 $tmp-shikiho $tmp-keiyaku       |
+self 1/4 9/NF 5/8                             |
+# 1:ID           2:会社             3:店舗コード       4:管理番号              5:契約先
+# 6:契約先コード 7:物件名           8:契約先(敷金保証金) 9:敷金保証金区分     10:建設協力金番号
+# 11:建設協力金番号枝番
+# 店舗名の設定
+cjoin2 key=2/3 $tmp-tenpo_name -              |
+# 店舗名の設定
+cjoin2 key=2 $tmp-kaisha_name -               |
+delf 2                                        |
+# 1:ID           2:会社名           3:店舗コード       4:店舗名                5:管理番号
+# 6:契約先       7:契約先コード     8:物件名           9:契約先(敷金保証金)   10:敷金保証金区分
+# 11:建設協力金番号    12:建設協力金番号枝番
+# 店舗名の設定
+cjoin2 key=10 $tmp-shikiho_kubun_name          |
+delf 10                                        |
+juni                                           |
+# 1:NO           2:ID               3:会社名           4:店舗コード            5:店舗名
+# 6:管理番号     7:契約先           8:契約先コード     9:物件名               10:契約先(敷金保証金) 
+# 11:敷金保証金区分      12:建設協力金番号    13:建設協力金番号枝番
+strcat 1 2 3 4 5 7 8 6 9 10 \"_\" 6 11 12      >$tmp-data
+ERROR_CHECK
+
+
+# 送信情報の作成
+cat $htmd/SHIKIHO_SEIGO.HTML                                             |
+sed -n '/検索テーブルA/,/検索テーブルB/p'                                |
+#mojihame -l###契約名称リスト### - $lv3d/TBL/KEIYAKU_MEISHO_SORT          |
+#mojihame -l###敷金保証金区分リスト### - $lv3d/TBL/SHIKIHO_KUBUN_SORT     |
+#mojihame -l###返済条件リスト### - $lv3d/TBL/HENSAI_JOKEN_SORT            |
+#mojihame -l###償還条件リスト### - $lv3d/TBL/HENSAI_JOKEN_SORT            |
+mojihame -l###整合表### - $tmp-data                    |
+cat                                                                      > $tmp-ajax
+ERROR_CHECK
+
+##################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+cat $tmp-ajax
+
+#################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0

@@ -1,0 +1,91 @@
+#!/usr/bin/bash -vx
+############################################################
+#
+# TENPOINFO_FOLDER.GET.AJAX
+#
+# 店舗情報フォルダ パス取得 AJAX
+#
+# 作成者: h-kato@usp-lab.com
+# 作成日: 2022/10/11
+#
+############################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+############################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv3d=$homd/DATA/LV3
+comd=$homd/APP/COMMON/HTML
+tmp=/tmp/tmp-$(basename $0).$(date +'%Y%m%d_%H%M%S').$$
+
+############################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+############################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+############################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"             |
+	cgi-name -n_ -s_                    |
+	cat                                 > $tmp-name
+ERROR_CHECK
+else
+	:                                   > $tmp-name
+ERROR_CHECK
+fi
+
+############################################################
+# アプリケーション由来情報の取得
+# 選択部
+kaisha=$(nameread 会社 $tmp-name)
+tenpo=$(nameread 店舗コード $tmp-name)
+
+# 表示情報の作成
+#  1:システム店舗NO             2:会社                         3:業態                       4:店舗コード                   5:使用状態                  
+#  6:会計部門コード             7:店舗名                       8:OPEN日                     9:都道府県名                   10:郵便番号                 
+#  11:住所1                     12:住所2                       13:電話番号                  14:契約フォルダ_使用状態       15:契約フォルダ_都道府県    
+#  16:契約フォルダ_店舗コード   17:店舗状態フォルダ_使用状態   18:店舗状態フォルダ_都道府県 19:店舗状態フォルダ_店舗コード 20:店舗履歴フォルダ_使用状態
+#  21:店舗履歴フォルダ_都道府県 22:店舗履歴フォルダ_店舗コード 23:契約形態                  24:店舗タイプ                  25:店舗形態                 
+#  26:売場坪数                  27:摘要                        28:閉店日                    29:解約日                      30:削除F                    
+#  31:更新日時                 
+cat $lv3d/TENPO_MASTER/TENPO_MASTER  |
+selr 2 "$kaisha"                     |
+selr 4 "$tenpo"                     |
+if [ $kaisha == "001" -o $kaisha == "002" ]; then
+        strcat '"http://localhost:8000\\afs\project\店舗情報\?"'+17+'"\?"'+'"?"'+19+'"?"'+'"?ACIMS"'
+elif [ $kaisha == "003" ]; then
+        strcat '"http://localhost:8000\\vfil02\新全社共有\店舗企画部\部門間共有\?"'+17+'"\?"'+18+'"\?"'+19+'"?ACIMS"'
+fi                                   |
+cat                                  > $tmp-ajax
+ERROR_CHECK
+
+
+############################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+cat $tmp-ajax
+
+############################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0
+

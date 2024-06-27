@@ -1,0 +1,236 @@
+#!/usr/bin/bash -vx
+#
+# TENPO_MASTER.SEND.AJAX
+#
+# 店舗マスタ 登録AJAX
+#
+# 作成者: k-tanaka@usp-lab.com
+# 作成日: 2022/10/11
+#
+##################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+##################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv1d=$homd/DATA/LV1
+lv3d=$homd/DATA/LV3
+sesd=$homd/SESSION
+tbld=$homd/TBL
+sysd=$homd/SYS
+comd=$homd/APP/COMMON/HTML
+tmp=/tmp/tmp-$$
+
+today=$(date +%Y%m%d)
+todayhms=$(date +%Y%m%d%H%M%S)
+##################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+##################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+##################################################
+# セッション確認
+echo $HTTP_COOKIE                                             |
+sed 's/; */\n/g'                                              |
+sed -n 's/=/ /p'                                              |
+cat                                                           > $tmp-cookie
+ERROR_CHECK
+
+session=$(nameread KEY $tmp-cookie)
+
+check_session $session                                        > $tmp-session_check
+ERROR_CHECK
+
+# セッションがない場合、ログイン画面へ遷移
+if [ ! -s $tmp-session_check ];then
+	cat $comd/GOTOURL.HTML                                       |
+	calsed "###URL###" "../../COMMON/CGI/LOGIN.CGI"              |
+	cat                                                          > $tmp-html
+ERROR_CHECK
+	
+	# HTML表示
+	echo "Content-type:text/html"
+	echo
+	cat $tmp-html
+ERROR_CHECK
+
+	rm -rf $tmp-*
+	exit 0
+fi
+
+# user情報
+user=$(selr 1 "user" $sesd/SESSION.$session | self 2)
+user_name=$(selr 1 "$user" $lv3d/TBL/USER_USERNAME | self 2)
+user_kaisha=$(selr 1 "$user" $lv3d/USER_MASTER/USER_MASTER | self 4)
+user_permit=$(selr 1 "$user" $lv3d/USER_MASTER/USER_MASTER | self 5)
+
+##################################################
+# ユーザ権限チェック
+if [ "$user_permit" == "01" -o "$user_permit" == "02" ]; then
+	:
+else
+	echo "Content-type:text/html"
+	echo ""
+	cat $comd/GOTOURL.HTML                          |
+	calsed "###URL###" "../../COMMON/CGI/LOGIN.CGI" |
+	cat
+	rm -rf $tmp-*
+	exit 0
+fi
+
+##################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"                       |
+	cgi-name -n_ -s_                              |
+	cat                                           > $tmp-name
+ERROR_CHECK
+else
+	:                                             > $tmp-name
+ERROR_CHECK
+fi
+
+##################################################
+# 登録処理
+
+# エラーリストを作成
+cat $tmp-name      |
+nameread エラーNO  |
+tr "," " "         |
+tarr               |
+#  1:エラーNO
+msort key=1        |
+cat                > $tmp-error_list
+ERROR_CHECK
+
+
+# 取得情報整形
+cat $tmp-name                                                                                                           |
+name-tag                                                                                                                |
+tagself ID                       会社                       業態                     店舗コード                 使用状態                 \
+        会計部門コード           店舗名                     OPEN日                   都道府県                   郵便番号                 \
+        住所1                    住所2                      電話番号                 契約書フォルダ使用状態     契約書フォルダ都道府県   \
+        契約書フォルダ店舗コード 店舗情報フォルダ使用状態   店舗情報フォルダ都道府県 店舗情報フォルダ店舗コード 店舗履歴フォルダ使用状態 \
+        店舗履歴フォルダ都道府県 店舗履歴フォルダ店舗コード 契約形態                 店舗タイプ                 店舗形態                 \
+				売場坪数                 摘要                       閉店日                   解約日                     削除                     \
+				NO                                                                                                                               |
+#  1:ID                        2:会社                        3:業態                      4:店舗コード                  5:使用状態                 
+#  6:会計部門コード            7:店舗名                      8:OPEN日                    9:都道府県                    10:郵便番号                
+#  11:住所1                    12:住所2                      13:電話番号                 14:契約先フォルダ使用状態     15:契約先フォルダ都道府県  
+#  16:契約先フォルダ店舗コード 17:店舗情報フォルダ使用状態   18:店舗情報フォルダ都道府県 19:店舗情報フォルダ店舗コード 20:店舗履歴フォルダ使用状態
+#  21:店舗履歴フォルダ都道府県 22:店舗履歴フォルダ店舗コード 23:契約形態                 24:店舗タイプ                 25:店舗形態                
+#  26:売場坪数                 27:摘要                       28:閉店日                   29:解約日                     30:削除                    
+#  31:NO                      
+# 必須項目、会社がないものは排除
+delr 2 "_"                                                                                                              |
+# ヘッダー排除
+sed 1d                                                                                                                  |
+# 登録時エラーがあるものは除去
+cjoin1 +ng3 key=NF $tmp-error_list 3>&1 1>/dev/null                                                                     |
+delf NF                                                                                                                 |
+# 日付整形
+dayslash --input yyyy/mm/dd 8 28 29                                                                                     |
+# 削除の場合はフラグを1へ
+fsed 's/true/1/30' 's/false/0/30'                                                                                       |
+msort key=1/30                                                                                                          |
+# 登録済み情報との差分のみ取得
+cjoin1 +ng3 key=2/30 <(cat $lv3d/TENPO_MASTER/TENPO_MASTER | delf 1 | msort key=1/29) - 1> /dev/null 3> $tmp-send_data
+ERROR_CHECK
+
+# 登録差分が存在する場合
+if [ -s $tmp-send_data ];then
+	#  1:ID                        2:会社                        3:業態                      4:店舗コード                  5:使用状態                 
+	#  6:会計部門コード            7:店舗名                      8:OPEN日                    9:都道府県                    10:郵便番号                
+	#  11:住所1                    12:住所2                      13:電話番号                 14:契約先フォルダ使用状態     15:契約先フォルダ都道府県  
+	#  16:契約先フォルダ店舗コード 17:店舗情報フォルダ使用状態   18:店舗情報フォルダ都道府県 19:店舗情報フォルダ店舗コード 20:店舗履歴フォルダ使用状態
+	#  21:店舗履歴フォルダ都道府県 22:店舗履歴フォルダ店舗コード 23:契約形態                 24:店舗タイプ                 25:店舗形態                
+	#  26:売場坪数                 27:摘要                       28:閉店日                   29:解約日                     30:削除                    
+	cat $tmp-send_data   |
+	selr 1 "_" |
+	cat > $tmp-id_mitouroku
+ERROR_CHECK
+	
+	if [ -s $tmp-id_mitouroku ];then
+		gyosu=$(gyo $tmp-id_mitouroku)
+
+		# ID採番
+		getno $gyosu $tbld/GETNO/TENPO_MASTER  |
+		ycat - $tmp-id_mitouroku   |
+		delf 2 |
+		cat > $tmp-shinki
+ERROR_CHECK
+	else
+		: > $tmp-shinki
+	fi
+	
+	# 登録情報の作成
+	#  1:ID                        2:会社                        3:業態                      4:店舗コード                  5:使用状態                 
+	#  6:会計部門コード            7:店舗名                      8:OPEN日                    9:都道府県                    10:郵便番号                
+	#  11:住所1                    12:住所2                      13:電話番号                 14:契約先フォルダ使用状態     15:契約先フォルダ都道府県  
+	#  16:契約先フォルダ店舗コード 17:店舗情報フォルダ使用状態   18:店舗情報フォルダ都道府県 19:店舗情報フォルダ店舗コード 20:店舗履歴フォルダ使用状態
+	#  21:店舗履歴フォルダ都道府県 22:店舗履歴フォルダ店舗コード 23:契約形態                 24:店舗タイプ                 25:店舗形態                
+	#  26:売場坪数                 27:摘要                       28:閉店日                   29:解約日                     30:削除                    
+  cat $tmp-send_data      |
+  delr 1 "_"              |
+  ucat - $tmp-shinki      |
+  msort key=1             |
+  strcat 0 \"$todayhms\"  |
+  #  1:ID                        2:会社                        3:業態                      4:店舗コード                  5:使用状態
+  #  6:会計部門コード            7:店舗名                      8:OPEN日                    9:都道府県                    10:郵便番号
+  #  11:住所1                    12:住所2                      13:電話番号                 14:契約先フォルダ使用状態     15:契約先フォルダ都道府県
+  #  16:契約先フォルダ店舗コード 17:店舗情報フォルダ使用状態   18:店舗情報フォルダ都道府県 19:店舗情報フォルダ店舗コード 20:店舗履歴フォルダ使用状態
+  #  21:店舗履歴フォルダ都道府県 22:店舗履歴フォルダ店舗コード 23:契約形態                 24:店舗タイプ                 25:店舗形態
+  #  26:売場坪数                 27:摘要                       28:閉店日                   29:解約日                     30:削除
+  #  31:更新日時
+  cat                     > $tmp-lv1
+ERROR_CHECK
+
+  	# LV1ディレクトリ作成
+   	mkdir -p $lv1d/TENPO_MASTER/"$today"
+ ERROR_CHECK
+   
+   	# LV1へ保存
+   	mv $tmp-lv1 $lv1d/TENPO_MASTER/"$today"/TENPO_MASTER_"$todayhms"_$$
+ ERROR_CHECK
+   
+   	# 整理バッチ
+   	$sysd/DATAMASTER.TENPO_MASTER $today 1> /dev/null 2> /dev/null
+  ERROR_CHECK
+else
+	:
+fi
+
+# 送信情報作成
+if [ $(cat $tmp-error_list) == "_" ]; then
+	echo -n "no_error"
+else
+	echo -n "exist_error"
+fi                       > $tmp-ajax
+
+##################################################
+# 作成情報送信
+echo "Content-type:text/html"
+echo
+cat $tmp-ajax
+
+#################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0

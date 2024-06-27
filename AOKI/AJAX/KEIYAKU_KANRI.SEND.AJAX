@@ -1,0 +1,256 @@
+#!/usr/bin/bash -vx
+############################################################
+#
+# KEIYAKU_KANRI.SEND.AJAX
+#
+# 契約管理情報 登録AJAX
+#
+# 作成者: t-kaida@usp-lab.com
+# 作成日: 2022/10/18
+#
+############################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+############################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv1d=$homd/DATA/LV1
+lv3d=$homd/DATA/LV3
+tbld=$homd/TBL
+sysd=$homd/SYS
+comd=$homd/APP/COMMON/HTML
+tmp=/tmp/tmp-$(basename $0).$(date +'%Y%m%d_%H%M%S').$$
+
+today=$(date +%Y%m%d)
+todayhms=$(date +%Y%m%d%H%M%S)
+
+############################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+############################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+############################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"                       |
+	cgi-name -n_ -s_                              |
+	cat                                           > $tmp-name
+ERROR_CHECK
+else
+	:                                             > $tmp-name
+ERROR_CHECK
+fi
+
+############################################################
+
+# エラーリストを作成
+cat $tmp-name      |
+nameread エラーNO  |
+tr "," " "         |
+tarr               |
+#  1:エラーNO
+msort key=1        |
+cat                > $tmp-error_list
+ERROR_CHECK
+
+#----------------------------------------
+# 登録済みの契約管理情報の取得（差分取得用）
+#----------------------------------------
+cat $lv3d/KEIYAKU/KEIYAKU	|
+delf 1                    | # IDを削除
+msort key=1/68            |
+cat                       > $tmp-shikiho_lv3
+ERROR_CHECK
+
+#----------------------------------------
+# 登録処理
+#----------------------------------------
+# 取得情報整形
+cat $tmp-name                                                               |
+name-tag                                                                    |
+tagself --ngthrough																													\
+				ID 会社 店舗コード 管理番号 業態 																		\
+				使用状態 担当者 オーナCD オーナCD枝番 契約先 												\
+        個法人区分 契約名称 賃貸借関係 契約種類 物件名 											\
+        OPEN日 契約日 原契約期間開始日 原契約期間満了日 更新契約期間満了日	\
+        次回改定日 改定条件 更新条件 更新予告 更新手数料 										\
+        自動更新 解約予告 中途解約条件 明渡条件 契約敷地面積 								\
+        契約敷地合計 契約延床面積 契約先コード 契約住所 都道府県名 					\
+        摘要 修繕区分契約内容 主キー オーナCD2 オーナCD枝番2								\
+				オーナ解約2 オーナCD3 オーナCD枝番3 オーナ解約3 オーナCD4						\
+				オーナCD枝番4 オーナ解約4 オーナCD5 オーナCD枝番5 オーナ解約5				\
+				オーナCD6 オーナCD枝番6 オーナ解約6 オーナCD7 オーナCD枝番7					\
+				オーナ解約7 オーナCD8 オーナCD枝番8 オーナ解約8 オーナCD9						\
+				オーナCD枝番9 オーナ解約9 オーナCD10 オーナCD枝番10 オーナ解約10		\
+				オーナCD11 オーナCD枝番11 オーナ解約11 削除 NO 											|
+#
+#  1:ID                2:会社              3:店舗コード         4:管理番号          5:業態
+#  6:使用状態          7:担当者            8:オーナーCD         9:オーナーCD_枝番   10:契約先
+#  11:個人法人区分     12:契約名称         13:賃貸借関係        14:契約種類         15:物件名
+#  16:OPEN日           17:契約日           18:契約期間開始日    19:原契約期間満了日 20:契約期間満了日
+#  21:次回改定日       22:改定条件         23:更新条件          24:更新予告         25:更新手数料
+#  26:自動更新         27:解約予告         28:解約条件          29:明渡条件         30:契約敷地面積
+#  31:契約敷地合計     32:契約延床面積     33:契約先コード      34:契約住所         35:都道府県名
+#  36:摘要             37:交渉履歴         38:主キー項目        39:オーナーCD2      40:オーナーCD枝番2
+#  41:オーナーCD2解約F 42:オーナーCD3      43:オーナーCD枝番3   44:オーナーCD3解約F 45:オーナーCD4
+#  46:オーナーCD枝番4  47:オーナーCD4解約F 48:オーナーCD5       49:オーナーCD枝番5  50:オーナーCD5解約F
+#  51:オーナーCD6      52:オーナーCD枝番6  53:オーナーCD6解約F  54:オーナーCD7      55:オーナーCD枝番7
+#  56:オーナーCD7解約F 57:オーナーCD8      58:オーナーCD枝番8   59:オーナーCD8解約F 60:オーナーCD9
+#  61:オーナーCD枝番9  62:オーナーCD9解約F 63:オーナーCD10      64:オーナーCD枝番10 65:オーナーCD10解約F
+#  66:オーナーCD11     67:オーナーCD枝番11 68:オーナーCD11解約F 69:削除F            70:NO
+
+uawk '{$33="_";print}'												| # 自動取得の契約先コードはブランクに
+delr 2 "_"                                    | # 必須項目、会社がないものは排除
+sed 1d                                        | # ヘッダー排除
+
+cjoin1 +ng3 key=NF $tmp-error_list 3>&1 1>/dev/null             | # 登録時エラーがあるNOのものは除去
+delf NF                                                         | # NOを削除
+
+uawk '{$39=="_"?$41="_":$41=="true"?$41="007":$41="002";print}' | # 解約Fがtrueの場合は"007"に
+uawk '{$42=="_"?$44="_":$44=="true"?$44="007":$44="002";print}' | # 解約Fがtrueの場合は"007"に
+uawk '{$45=="_"?$47="_":$47=="true"?$47="007":$47="002";print}' | # 解約Fがtrueの場合は"007"に
+uawk '{$48=="_"?$50="_":$50=="true"?$50="007":$50="002";print}' | # 解約Fがtrueの場合は"007"に
+uawk '{$51=="_"?$53="_":$53=="true"?$53="007":$53="002";print}' | # 解約Fがtrueの場合は"007"に
+uawk '{$54=="_"?$56="_":$56=="true"?$56="007":$56="002";print}' | # 解約Fがtrueの場合は"007"に
+uawk '{$57=="_"?$59="_":$59=="true"?$59="007":$59="002";print}' | # 解約Fがtrueの場合は"007"に
+uawk '{$60=="_"?$62="_":$62=="true"?$62="007":$62="002";print}' | # 解約Fがtrueの場合は"007"に
+uawk '{$63=="_"?$65="_":$65=="true"?$65="007":$65="002";print}' | # 解約Fがtrueの場合は"007"に
+uawk '{$66=="_"?$68="_":$68=="true"?$68="007":$68="002";print}' | # 解約Fがtrueの場合は"007"に
+
+fsed 's/true/1/69' 's/false/0/69'             | # 削除の場合はフラグを1へ
+dayslash --input yyyy/mm/dd 16 17 18 19 20 21	| # 日付をyyyy/mm/dd から　yyyymmdd へ
+fsed 's/,//30' 's/,//31' 's/,//32'         		| # 数値部分、カンマ排除
+
+# 登録済み情報との差分のみ取得
+cjoin1 +ng2 key=2/69 $tmp-shikiho_lv3 1> /dev/null 2> $tmp-send_data
+ERROR_CHECK
+
+# 登録差分が存在する場合
+if [ -s $tmp-send_data ];then
+	cat $tmp-send_data                          |
+	selr 1 "_"                                  | # IDがないものは採番
+	cat                                         > $tmp-id_mitouroku
+	ERROR_CHECK
+	
+	if [ -s $tmp-id_mitouroku ];then
+  	gyosu=$(gyo $tmp-id_mitouroku)
+
+		getno $gyosu $tbld/GETNO/KEIYAKU          | # ID採番
+		ycat - $tmp-id_mitouroku                  |
+		delf 2                                    |
+		cat                                       > $tmp-shinki
+  	ERROR_CHECK
+	else
+			:                                       > $tmp-shinki
+	fi
+	
+	# 登録情報の作成
+	cat $tmp-send_data                          |
+	delr 1 "_"                                  |
+	ucat - $tmp-shinki	                        |
+	msort key=1                                 |
+	strcat 0 \"$todayhms\"                      |
+	cat                                         > $tmp-lv1
+  ERROR_CHECK
+
+	# LV1ディレクトリ作成
+	mkdir -p $lv1d/KEIYAKU/"$today"
+  ERROR_CHECK
+
+	# LV1へ保存
+	mv $tmp-lv1 $lv1d/KEIYAKU/"$today"/KEIYAKU_"$todayhms"_$$
+  ERROR_CHECK
+
+	# 整理バッチ
+	$sysd/DATAMASTER.KEIYAKU $today 1> /dev/null 2> /dev/null
+  ERROR_CHECK
+
+	## 削除の場合、紐づく交渉履歴、修繕・工事関係も削除
+  cat $tmp-send_data  |
+  selr NF 1           |
+  self 2 3 4          |
+  #  1:会社 2:店舗コード 3:管理番号
+  msort key=1/3       |
+  cat                 > $tmp-oyako_sakuzyo
+	ERROR_CHECK
+
+	# 交渉履歴削除
+	cat $tmp-oyako_sakuzyo |
+	cjoin0 key=1/3 - $lv3d/KOSHORIREKI/KOSHORIREKI |
+	#  1:会社CD   2:店舗CD 3:管理番号 4:交渉履歴日付 5:内容
+	#  6:登録日時 7:登録No 8:削除F    9:更新日時    
+	strcat 1/7 \"1\" \"$todayhms\" |
+	cat > $tmp-koshorireki_lv1
+	ERROR_CHECK
+
+	# 交渉履歴 登録処理
+	if [ -s $tmp-koshorireki_lv1 ]; then
+		# LV1ディレクトリ作成
+		mkdir -p $lv1d/KOSHORIREKI/"$today"
+ERROR_CHECK
+	
+		# LV1へ保存
+		mv $tmp-koshorireki_lv1 $lv1d/KOSHORIREKI/"$today"/KOSHORIREKI_"$todayhms"_$$
+ERROR_CHECK
+	
+		# 整理バッチ
+		$sysd/DATAMASTER.KOSHORIREKI $today 1> /dev/null 2> /dev/null
+ERROR_CHECK
+	fi
+
+	# 修繕工事削除
+  cat $tmp-oyako_sakuzyo                        |
+  cjoin0 key=1/3 - $lv3d/SHUZENKOJI/SHUZENKOJI  |
+  #  1:会社CD   2:店舗CD 3:管理番号 4:修繕工事日付 5:内容
+  #  6:登録日時 7:登録No 8:削除     9:更新日時
+  strcat 1/7 \"1\" \"$todayhms\"                |
+  cat                                           > $tmp-shuzenkoji_lv1
+	ERROR_CHECK
+
+	# 修繕工事 登録処理
+	if [ -s $tmp-shuzenkoji_lv1 ]; then
+		# LV1ディレクトリ作成
+		mkdir -p $lv1d/SHUZENKOJI/"$today"
+ERROR_CHECK
+	
+		# LV1へ保存
+		mv $tmp-shuzenkoji_lv1 $lv1d/SHUZENKOJI/"$today"/SHUZENKOJI_"$todayhms"_$$
+ERROR_CHECK
+	
+		# 整理バッチ
+		$sysd/DATAMASTER.SHUZENKOJI $today 1> /dev/null 2> /dev/null
+ERROR_CHECK
+	fi
+
+else
+	:
+fi
+
+############################################################
+# 作成情報送信
+echo "Content-type:text/html"
+echo
+echo -n "ok"
+
+############################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0
+

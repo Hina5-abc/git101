@@ -1,0 +1,122 @@
+#!/usr/bin/bash -vx
+#
+# SHUZENKOJI.SEND.CGI
+#
+# 契約台帳 修繕工事関係 登録CGI
+#
+# 作成者: h-kato@usp-lab.com
+# 作成日: 2022/09/24
+#
+##################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+##################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv1d=$homd/DATA/LV1
+lv3d=$homd/DATA/LV3
+tbld=$homd/TBL
+sysd=$homd/SYS
+comd=$homd/APP/COMMON/HTML
+tmp=/tmp/tmp-$$
+
+today=$(date +%Y%m%d)
+todayhms=$(date +%Y%m%d%H%M%S)
+##################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+##################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+
+##################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"                       |
+	cgi-name -n_ -s_                              |
+	cat                                           > $tmp-name
+ERROR_CHECK
+else
+	:                                             > $tmp-name
+ERROR_CHECK
+fi
+
+##################################################
+
+cat $tmp-name                                                    |
+name-tag                                                         |
+tagself 会社CD 店舗CD 管理番号 修繕工事日付 修繕工事内容         \
+        修繕工事登録日時 修繕工事登録No 修繕工事削除 修繕工事No  |
+#  1:会社CD   2:店舗CD 3:管理番号 4:修繕工事日付 5:内容
+#  6:登録日時 7:登録No 8:削除     9:修繕工事No
+# 必須項目、日付、内容がないものは排除
+cond '!($4 == "_" && $5 == "_")'                                 |
+# ヘッダー排除
+sed 1d                                                           |
+# 削除の場合はフラグを1へ
+fsed 's/true/1/8' 's/false/0/8'                                  |
+# 登録済み情報との差分のみ取得
+cjoin1 +ng2 key=1/8 $lv3d/SHUZENKOJI/SHUZENKOJI 1>/dev/null 2>$tmp-send_data
+ERROR_CHECK
+
+# 登録差分が存在する場合
+if [ -s $tmp-send_data ];then
+	#  1:会社CD   2:店舗CD 3:管理番号 4:修繕工事日付 5:内容
+	#  6:登録日時 7:登録No 8:削除     9:修繕工事No  
+  cat $tmp-send_data               |
+  # 新規登録データの場合
+  fsed 's/_/'$todayhms'/6'  |
+	uawk '{
+		if($7 == "_"){
+			$7=$9;
+		}
+		print;
+	}'                        |
+	# 更新日時付与
+  strcat 1/8 \"$todayhms\"  |
+	#  1:会社CD   2:店舗CD 3:管理番号 4:修繕工事日付 5:内容
+	#  6:登録日時 7:登録No 8:削除     8:更新日時
+  cat                              > $tmp-lv1
+ERROR_CHECK
+
+	# LV1ディレクトリ作成
+	mkdir -p $lv1d/SHUZENKOJI/"$today"
+ERROR_CHECK
+
+	# LV1へ保存
+	mv $tmp-lv1 $lv1d/SHUZENKOJI/"$today"/SHUZENKOJI_"$todayhms"_$$
+ERROR_CHECK
+
+	# 整理バッチ
+	$sysd/DATAMASTER.SHUZENKOJI $today 1> /dev/null 2> /dev/null
+ERROR_CHECK
+else
+	:
+fi
+
+##################################################
+# 作成情報送信
+echo "Content-type:text/html"
+echo
+echo -n "ok"
+
+#################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0

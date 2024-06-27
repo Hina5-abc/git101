@@ -1,0 +1,123 @@
+#!/usr/bin/bash -vx
+#
+# USER_MASTER.SEARCH.AJAX
+#
+# ユーザー情報再表示 AJAX
+#
+# 作成者: h-kato@usp-lab.com
+# 作成日: 2022/10/17
+#
+##################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+##################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv3d=$homd/DATA/LV3
+sesd=$homd/SESSION
+comd=$homd/APP/COMMON/HTML
+tmp=/tmp/tmp-$$
+
+##################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+##################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+##################################################
+# セッション確認
+echo $HTTP_COOKIE                                             |
+sed 's/; */\n/g'                                              |
+sed -n 's/=/ /p'                                              |
+cat                                                           > $tmp-cookie
+ERROR_CHECK
+
+session=$(nameread KEY $tmp-cookie)
+
+check_session $session                                        > $tmp-session_check
+ERROR_CHECK
+
+# セッションがない場合、ログイン画面へ遷移
+if [ ! -s $tmp-session_check ];then
+	cat $comd/GOTOURL.HTML                                       |
+	calsed "###URL###" "../../COMMON/CGI/LOGIN.CGI"              |
+	cat                                                          > $tmp-html
+ERROR_CHECK
+	
+	# HTML表示
+	echo "Content-type:text/html"
+	echo
+	cat $tmp-html
+ERROR_CHECK
+
+	rm -rf $tmp-*
+	exit 0
+fi
+
+# user情報
+user=$(selr 1 "user" $sesd/SESSION.$session | self 2)
+user_name=$(selr 1 "$user" $lv3d/TBL/USER_USERNAME | self 2)
+
+
+##################################################
+# 初期表示
+#  1:ユーザーID 2:ユーザー名称 3:パスワード(ハッシュ値) 4:会社名 5:ロールNO
+#  6:削除F      7:更新日時    
+cat $lv3d/USER_MASTER/USER_MASTER  |
+delr 1 NF-1                        |
+self 1 2 4 5                       |
+#  1:ユーザーID 2:ユーザー名称 3:会社名 4:ロールNO
+# ロール名を連結
+cjoin2 key=NF $lv3d/TBL/ROLE_NAME  |
+#  1:ユーザーID 2:ユーザー名称 3:会社名 4:ロールNO 5:ロール名
+cat                                > $tmp-search_data
+ERROR_CHECK
+
+# 追加用フィールド作成
+echo "_"                            |
+yarr                                |
+ransu 5                             |
+cat                                 > $tmp-plus_gyo
+ERROR_CHECK
+
+# 表示データ作成
+cat $tmp-search_data $tmp-plus_gyo  |
+juni                                |
+maezero 1.6                         > $tmp-data
+ERROR_CHECK
+
+##################################################
+# HTML作成
+cat $htmd/USER_MASTER.HTML                                              |
+sed -n '/検索テーブルA/,/検索テーブルB/p'                               |
+mojihame -l###会社リスト### - <(msort key=NF $lv3d/TBL/KAISHA_NAME)  |
+mojihame -l###ユーザー情報### - $tmp-data                               |
+cat                                                                     > $tmp-ajax
+ERROR_CHECK
+
+##################################################
+# HTML表示
+echo "Content-type:text/html"
+echo
+cat $tmp-ajax
+
+#################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0

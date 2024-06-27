@@ -1,0 +1,158 @@
+#!/usr/bin/bash -vx
+#
+# NENKAN_KEIKAKU.SEARCH.AJAX
+#
+# 年間計画 一括取込 検索 AJAX
+#
+# 作成者: h-kato@usp-lab.com
+# 作成日: 2022/07/25
+#
+##################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+##################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv3d=$homd/DATA/LV3
+comd=$homd/APP/COMMON/HTML
+tmp=/tmp/tmp-$$
+
+##################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+##################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+##################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"             |
+	cgi-name -n_ -s_                    |
+	cat                                 > $tmp-name
+ERROR_CHECK
+else
+	:                                   > $tmp-name
+ERROR_CHECK
+fi
+
+##################################################
+# アプリケーション由来情報の取得
+kaisha=$(nameread 会社検索 $tmp-name)
+tenpo_start=$(nameread 店舗コード検索開始 $tmp-name)
+tenpo_end=$(nameread 店舗コード検索終了 $tmp-name)
+# 店舗開始のみ情報がある場合は、店舗開始と店舗終了に同一の店舗を与える
+[ "$tenpo_end" == "_" ] && tenpo_end=$tenpo_start
+nendo_start=$(nameread 会計年度開始 $tmp-name)
+nendo_end=$(nameread 会計年度終了 $tmp-name)
+# 会計年度開始のみ情報がある場合は、会計年度開始と皆生年度終了に同一の年月を与える
+[ "$nendo_end" == "_" ] && nendo_end=$nendo_start
+
+# 検索元情報の取得
+#  1:会社 2:会計年度 3:区分  4:店舗名   5:店舗コード
+#  6:売上 7:営業利益 8:削除F 9:更新日時
+cat $lv3d/NENKAN_KEIKAKU/NENKAN_KEIKAKU             |
+# 削除Fが1のものを除去
+delr NF-1 1                                         |
+# 会社検索
+selr --through "_" 1 "$kaisha"                      |
+# 店舗開始検索
+if [ "$tenpo_start" == "_" ];then
+        cat
+else
+        uawk '$5>= "'$tenpo_start'"'
+fi                                                  |
+# 店舗終了検索
+if [ "$tenpo_end" == "_" ];then
+        cat
+else
+        uawk '$5<= "'$tenpo_end'"'
+fi                                                  |
+# 会計年度開始検索
+if [ "$nendo_start" == "_" ];then
+        cat
+else
+        uawk '$2>= "'$nendo_start'"'
+fi                                                  |
+# 会計年度終了検索
+if [ "$nendo_end" == "_" ];then
+        cat
+else
+        uawk '$2<= "'$nendo_end'"'
+fi                                                  |
+# 営業利益がマイナスの場合は文字を赤色にする
+uawk '{
+        if($7 < 0){
+                print $0, "text-danger";
+        }else{
+                print $0, "text-dark";
+        }
+}'                                                  |
+#  1:会社 2:会計年度 3:区分  4:店舗名   5:店舗コード
+#  6:売上 7:営業利益 8:削除F 9:更新日時 10:営業利益文字色
+# 店舗名を連結
+self 0 1 5                                          |
+cjoin2 key=NF-1/NF $lv3d/TBL/KAISHA_TENPOCO_NAME -  |
+#  1:会社  2:会計年度 3:区分    4:店舗名   5:店舗コード
+#  6:売上  7:営業利益 8:削除F   9:更新日時 10:営業利益文字色
+#  11:会社 12:店舗CD  13:店舗名
+self 1/3 5 13 6/10                                  |
+#  1:会社 2:会計年度 3:区分  4:店舗コード 5:店舗名
+#  6:売上 7:営業利益 8:削除F 9:更新日時   10:営業利益文字色
+# カンマ付け
+comma 6 7                                           |
+msort key=1/2@4                                     |
+cat                                                 > $tmp-search_data
+ERROR_CHECK
+
+# 追加用フィールド作成
+echo "_"   |
+ransu 5    |
+cat        > $tmp-plus_gyo
+ERROR_CHECK
+
+# 表示データ作成
+cat $tmp-search_data $tmp-plus_gyo  |
+# No付与
+juni                                |
+#  1:NO              2:会社 3:会計年度 4:区分  5:店舗コード
+#  6:店舗名          7:売上 8:営業利益 9:削除F 10:更新日時 
+#  11:営業利益文字色
+maezero 1.6                         > $tmp-data
+ERROR_CHECK
+
+##################################################
+# 送信情報の作成
+cat $htmd/NENKAN_KEIKAKU.HTML                                        |
+sed -n '/検索テーブルA/,/検索テーブルB/p'                            |
+mojihame -l###会社検索###   - <(msort key=NF $lv3d/TBL/KAISHA_NAME)  |
+mojihame -l###会社リスト### - <(msort key=NF $lv3d/TBL/KAISHA_NAME)  |
+mojihame -l###店舗情報### - $tmp-data                                |
+cat                                                                  > $tmp-ajax
+ERROR_CHECK
+
+##################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+cat $tmp-ajax
+
+#################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0

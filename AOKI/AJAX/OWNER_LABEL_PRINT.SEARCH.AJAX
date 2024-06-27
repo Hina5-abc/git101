@@ -1,0 +1,296 @@
+#!/usr/bin/bash -vx
+#
+# OWNER_LABEL_PRINT.SEARCH.AJAX
+#
+# オーナーラベル印刷 検索 AJAX
+#
+# 作成者: k-bando@usp-lab.com
+# 作成日: 2022/11/07
+#
+##################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+##################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv3d=$homd/DATA/LV3
+comd=$homd/APP/COMMON/HTML
+sesd=$homd/SESSION
+tmp=/tmp/tmp-$$
+
+##################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+##################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+##################################################
+# セッション確認
+echo $HTTP_COOKIE                                                  |
+sed 's/; */\n/g'                                                   |
+sed -n 's/=/ /p'                                                   |
+cat                                                                > $tmp-cookie
+ERROR_CHECK
+
+session=$(nameread KEY $tmp-cookie)
+
+check_session $session                                             > $tmp-session_check
+ERROR_CHECK
+
+# user情報
+user=$(selr 1 "user" $sesd/SESSION.$session | self 2)
+user_name=$(selr 1 "$user" $lv3d/TBL/USER_USERNAME | self 2)
+user_kaisha=$(selr 1 "$user" $lv3d/USER_MASTER/USER_MASTER | self 4)
+user_permit=$(selr 1 "$user" $lv3d/USER_MASTER/USER_MASTER | self 5)
+
+
+##################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"             |
+	cgi-name -n_ -s_                    |
+	cat                                 > $tmp-name
+ERROR_CHECK
+else
+	:                                   > $tmp-name
+ERROR_CHECK
+fi
+
+##################################################
+# アプリケーション由来情報の取得
+
+
+#  入力された会社、店舗コードを検索に使う
+#  契約情報を取り出す(該当の会社、店舗コードのもの)
+#  契約情報のオーナーCD,オーナーCD枝番を取り出す
+#  オーナーCD, オーナーCD枝番のオーナーマスタを表示する
+
+# 
+#  会社CD、店舗コード 
+# 
+
+name-tag $tmp-name                                              |
+tagself "会社検索" "店舗コード検索"                             |
+sed 1d                                                          |
+#  1:会社名 2:店舗コード
+juni                                                            |
+#  1:並び順 2:会社名 3:店舗コード
+self 2 3 1                                                      |
+#  1:会社名 2:店舗コード 3:並び順
+msort key=1/2                                                   |
+tee $tmp-tenpo_code_name                                        |
+cjoin1 key=1 <(self 2 1 $lv3d/TBL/KAISHA_NAME | msort key=1) -  |
+#  1:会社名 2:会社CD 3:店舗コード 4:並び順
+lineup 2 3 4                                                    |
+#  1:会社CD 2:店舗コード 3:並び順
+cat                                                             > $tmp-tenpo_code
+ERROR_CHECK
+
+
+cat $lv3d/TENPO_MASTER/TENPO_MASTER  |
+#  1:システム店舗NO             2:会社                         3:業態                       4:店舗コード
+#  6:会計部門コード             7:店舗名                       8:OPEN日                     9:都道府県名
+#  11:住所1                     12:住所2                       13:電話番号                  14:契約フォルダ_使用状態
+#  16:契約フォルダ_店舗コード   17:店舗状態フォルダ_使用状態   18:店舗状態フォルダ_都道府県 19:店舗状態フォルダ_店舗>
+#  21:店舗履歴フォルダ_都道府県 22:店舗履歴フォルダ_店舗コード 23:契約形態                  24:店舗タイプ
+#  26:売場坪数                  27:摘要                        28:閉店日                    29:解約日
+#  31:更新日時
+delr NF-1 1                          |
+self 4 7                             |
+#  店舗コード 店舗名
+msort key=1                          > $tmp-tenpo_name
+ERROR_CHECK
+
+cat $lv3d/SHIYOJOTAI_MASTER/SHIYOJOTAI_MASTER                    |
+delr NF-1 1                                                      |
+self 1 2                                                         > $tmp-shiyojotai_master
+ERROR_CHECK
+
+cat $lv3d/CHINTAISHAKU_KANKEI_MASTER/CHINTAISHAKU_KANKEI_MASTER  |
+delr NF-1 1                                                      |
+self 1 2                                                         > $tmp-chintaishaku_kankei_master
+ERROR_CHECK
+
+cat $lv3d/TBL/KAISHA_NAME |
+delr NF-1 1               |
+self 1 2                  > $tmp-kaisha_name
+ERROR_CHECK
+
+cat << FIN | msort key=1 > $tmp-shorui_sofu_saki
+001 直接
+002 連絡先
+_ 直接
+FIN
+
+cat $lv3d/KEIYAKU/KEIYAKU                                             |
+#  1:ID                2:会社              3:店舗コード         4:管理番号          5:業態
+#  6:使用状態          7:担当者            8:オーナーCD         9:オーナーCD_枝番   10:契約先
+#  11:個人法人区分     12:契約名称         13:賃貸借関係        14:契約種類         15:物件名
+#  16:OPEN日           17:契約日           18:契約期間開始日    19:原契約期間満了日 20:契約期間満了日
+#  21:次回改定日       22:改定条件         23:更新条件          24:更新予告         25:更新手数料
+#  26:自動更新         27:解約予告         28:解約条件          29:明渡条件         30:契約敷地面積
+#  31:契約敷地合計     32:契約延床面積     33:契約先コード      34:契約形態         35:都道府県名
+#  36:摘要             37:交渉履歴         38:主キー項目        39:オーナーCD2      40:オーナーCD枝番2
+#  41:オーナーCD2解約F 42:オーナーCD3      43:オーナーCD枝番3   44:オーナーCD3解約F 45:オーナーCD4
+#  46:オーナーCD枝番4  47:オーナーCD4解約F 48:オーナーCD5       49:オーナーCD枝番5  50:オーナーCD5解約F
+#  51:オーナーCD6      52:オーナーCD枝番6  53:オーナーCD6解約F  54:オーナーCD7      55:オーナーCD枝番7
+#  56:オーナーCD7解約F 57:オーナーCD8      58:オーナーCD枝番8   59:オーナーCD8解約F 60:オーナーCD9
+#  61:オーナーCD枝番9  62:オーナーCD9解約F 63:オーナーCD10      64:オーナーCD枝番10 65:オーナーCD10解約F
+#  66:オーナーCD11     67:オーナーCD枝番11 68:オーナーCD11解約F 69:削除F            70:更新日時
+#
+#  削除フラグ=1と使用状況=007解約を除く
+delr NF-1 1                                                           |
+cond '$6 != "007"'                                                    |
+cjoin0 key=2/3 $tmp-tenpo_code                                        |
+self 2  3  4  6 13                                                    \
+     8  9                                                             |
+#  1:会社       2:店舗コード     3:管理番号 4:使用状態 5:賃貸借関係
+#  6:オーナーCD 7:オーナーCD枝番
+tee $tmp-owner_cd                                                     |
+self 0 2 | cjoin2 key=NF $tmp-tenpo_name | delf NF-1                  |
+#  1:会社       2:店舗コード     3:管理番号 4:使用状態 5:賃貸借関係
+#  6:オーナーCD 7:オーナーCD枝番 8:店舗名
+self 0 4 | cjoin2 key=NF $tmp-shiyojotai_master | delf NF-1           |
+#  1:会社       2:店舗コード     3:管理番号 4:使用状態   5:賃貸借関係
+#  6:オーナーCD 7:オーナーCD枝番 8:店舗名   9:使用状態名
+self 0 5 | cjoin2 key=NF $tmp-chintaishaku_kankei_master | delf NF-1  |
+#  1:会社       2:店舗コード     3:管理番号 4:使用状態   5:賃貸借関係
+#  6:オーナーCD 7:オーナーCD枝番 8:店舗名   9:使用状態名 10:賃貸借関係名
+self 0 1 | cjoin2 key=NF $tmp-kaisha_name | delf NF-1                 |
+#  1:会社       2:店舗コード     3:管理番号 4:使用状態   5:賃貸借関係
+#  6:オーナーCD 7:オーナーCD枝番 8:店舗名   9:使用状態名 10:賃貸借関係名
+#  11:会社名
+self 11 2 3 9 10 8 1 6 7                                              |
+#  1:会社   2:店舗コード 3:管理番号   4:使用状態       5:賃貸借関係
+#  6:店舗名 7:会社       8:オーナーCD 9:オーナーCD枝番
+cat                                                                   > $tmp-keiyaku
+ERROR_CHECK
+
+#  1:会社       2:店舗コード     3:管理番号 4:使用状態 5:賃貸借関係
+#  6:オーナーCD 7:オーナーCD枝番
+cat $tmp-owner_cd                                 |
+self 1 6 7                                        |
+#  1:会社 2:オーナーCD 3:オーナーCD枝番
+msort key=1/3                                     |
+cjoin0 key=2/4 - $lv3d/OWNER_MASTER/OWNER_MASTER  |
+#  1:ID                  2:会社名              3:オーナーCD           4:オーナーCD枝番        5:オーナー会社名
+#  6:役職名              7:氏名                8:郵便番号             9:住所_1                10:住所_2
+#  11:TEL                12:携帯               13:メールアドレス      14:オーナー備考         15:書類送付先
+#  16:連絡先関係         17:連絡先会社名       18:連絡先役職名        19:連絡先氏名           20:連絡先郵便番号
+#  21:連絡先住所_1       22:連絡先住所_2       23:連絡先TEL           24:連絡先携帯           25:連絡先メールアドレス
+#  26:お中元お歳暮会社名 27:お中元お歳暮役職名 28:お中元お歳暮氏名    29:お中元お歳暮郵便番号 30:お中元お歳暮住所_1
+#  31:お中元お歳暮住所_2 32:お中元お歳暮TEL    33:お中元お歳暮携帯    34:連絡先備考           35:契約種類
+#  36:契約先区分         37:お中元_お歳暮品目  38:お中元_お歳暮送付先 39:お中元備考           40:契約先コード
+#  41:県名               42:マイナンバー       43:事業者              44:摘要                 45:削除F
+#  46:更新日時
+delr NF-1 1                                       > $tmp-owner_master.0
+ERROR_CHECK
+
+cat $tmp-owner_master.0 |
+#  書類送付先==連絡先のケース
+cond '$15=="002"' |
+self 2 3 4 17 18 \
+     19 20 21 22 23 \
+     15 16 17 18 19 \
+     20 21 22 23 |
+#  1:会社        2:オーナーCD  3:オーナーCD枝番  4:(編集用)会社名 5:役職名
+#  6:氏名        7:郵便番号    8:住所_1          9:住所_2         10:TEL  
+#  11:書類送付先 12:連絡先関係 13:(連絡先)会社名 14:役職名        15:氏名 
+#  16:郵便番号   17:住所_1     18:住所_2         19:TEL          
+#  編集用＝＝連絡先にする。背景色を黄色にする。
+strcat 0 \"background-color:lightyellow\;\" |
+#  1:会社        2:オーナーCD  3:オーナーCD枝番  4:(編集用)会社名 5:役職名
+#  6:氏名        7:郵便番号    8:住所_1          9:住所_2         10:TEL  
+#  11:書類送付先 12:連絡先関係 13:(連絡先)会社名 14:役職名        15:氏名 
+#  16:郵便番号   17:住所_1     18:住所_2         19:TEL           20:セル背景指定
+cat > $tmp-owner_master.1a
+ERROR_CHECK
+
+cat $tmp-owner_master.0 |
+#  書類送付先==連絡先のケース
+cond '$15!="002"' |
+self 2 3 4 5 6 \
+     7  8  9  10 11 \
+     15 16 17 18 19 \
+     20 21 22 23 |
+#  会社 オーナーCD オーナーCD枝番 
+#  (編集用)会社名 役職名 氏名 郵便番号 住所_1 住所_2 TEL
+#  (連絡先)会社名 役職名 氏名 郵便番号 住所_1 住所_2 TEL
+strcat 0 \"_\" |
+#  1:会社        2:オーナーCD  3:オーナーCD枝番  4:(編集用)会社名 5:役職名
+#  6:氏名        7:郵便番号    8:住所_1          9:住所_2         10:TEL
+#  11:書類送付先 12:連絡先関係 13:(連絡先)会社名 14:役職名        15:氏名
+#  16:郵便番号   17:住所_1     18:住所_2         19:TEL           20:セル背景色指定
+cat > $tmp-owner_master.1b
+ERROR_CHECK
+
+#  1:会社        2:オーナーCD  3:オーナーCD枝番  4:(編集用)会社名 5:役職名         
+#  6:氏名        7:郵便番号    8:住所_1          9:住所_2         10:TEL           
+#  11:書類送付先 12:連絡先関係 13:(連絡先)会社名 14:役職名        15:氏名          
+#  16:郵便番号   17:住所_1     18:住所_2         19:TEL           20:セル背景色指定
+cat $tmp-owner_master.1*                       |
+cjoin2 key=11 $tmp-shorui_sofu_saki | delf 11  |
+msort key=1/3                                  |
+cjoin2 key=7/9 - $tmp-keiyaku                  |
+#  1:会社            2:店舗コード  3:管理番号    4:使用状態        5:賃貸借関係     
+#  6:店舗名          7:会社        8:オーナーCD  9:オーナーCD枝番  10:(編集用)会社名
+#  11:役職名         12:氏名       13:郵便番号   14:住所_1         15:住所_2        
+#  16:TEL            17:書類送付先 18:連絡先関係 19:(連絡先)会社名 20:役職名        
+#  21:氏名           22:郵便番号   23:住所_1     24:住所_2         25:TEL           
+#  26:セル背景色指定
+self 1/6 8/NF 1 2 | cjoin2 key=NF-1/NF $tmp-tenpo_code_name | delf NF-2 NF-1 |
+#  1:会社        2:店舗コード  3:管理番号        4:使用状態       5:賃貸借関係
+#  6:店舗名      7:オーナーCD  8:オーナーCD枝番  9:(編集用)会社名 10:役職名
+#  11:氏名       12:郵便番号   13:住所_1         14:住所_2        15:TEL
+#  16:書類送付先 17:連絡先関係 18:(連絡先)会社名 19:役職名        20:氏名
+#  21:郵便番号   22:住所_1     23:住所_2         24:TEL           25:セル背景色指定
+#  26:検索順
+msort key=NF@1@5 | delf NF                       |
+juni                                           |
+#  1:行番号          2:会社        3:店舗コード  4:管理番号        5:使用状態
+#  6:賃貸借関係      7:店舗名      8:オーナーCD  9:オーナーCD枝番  10:(編集用)会社名
+#  11:役職名         12:氏名       13:郵便番号   14:住所_1         15:住所_2
+#  16:TEL            17:書類送付先 18:連絡先関係 19:(連絡先)会社名 20:役職名
+#  21:氏名           22:郵便番号   23:住所_1     24:住所_2         25:TEL
+#  26:セル背景色指定
+self 1 2 5 6 3 7 10/16 17 18 19/25 26          |
+#  1:行番号  2:会社    3:使用状態        4:賃貸借関係  5:店舗コード
+#  6:店舗名  7:会社名  8:役職名          9:氏名        10:郵便番号
+#  11:住所_1 12:住所_2 13:TEL            14:書類送付先 15:連絡先関係
+#  16:会社名 17:役職名 18:氏名           19:郵便番号   20:住所_1
+#  21:住所_2 22:TEL    23:セル背景色指定
+cat                                            > $tmp-data
+
+# 送信情報の作成
+cat $htmd/OWNER_LABEL_PRINT.HTML              |
+sed -n '/検索テーブルA/,/検索テーブルB/p'     |
+mojihame -l###オーナー情報### - $tmp-data     |
+cat                                           > $tmp-ajax
+ERROR_CHECK
+
+##################################################
+# 情報送信
+echo "Content-type:text/html"
+echo ""
+cat $tmp-ajax
+
+#################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0

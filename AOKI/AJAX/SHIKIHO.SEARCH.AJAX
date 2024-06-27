@@ -1,0 +1,258 @@
+#!/usr/bin/bash -vx
+############################################################
+#
+# SHIKIHO.SEARCH.AJAX
+#
+# 敷金保証金建設協力金情報 検索 AJAX
+#
+# 作成者: t-kaida@usp-lab.com
+# 作成日: 2022/10/18
+#
+############################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+############################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv3d=$homd/DATA/LV3
+comd=$homd/APP/COMMON/HTML
+sesd=$homd/SESSION
+tmp=/tmp/tmp-$(basename $0).$(date +'%Y%m%d_%H%M%S').$$
+
+# 変数指定
+today=$(date +%Y%m%d)
+today_yymm=$(date +%Y%m)
+
+############################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+############################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+##################################################
+# セッション確認
+echo $HTTP_COOKIE                                                  |
+sed 's/; */\n/g'                                                   |
+sed -n 's/=/ /p'                                                   |
+cat                                                                > $tmp-cookie
+ERROR_CHECK
+
+session=$(nameread KEY $tmp-cookie)
+
+check_session $session                                             > $tmp-session_check
+ERROR_CHECK
+
+# user情報
+user=$(selr 1 "user" $sesd/SESSION.$session | self 2)
+user_name=$(selr 1 "$user" $lv3d/TBL/USER_USERNAME | self 2)
+user_kaisha=$(selr 1 "$user" $lv3d/USER_MASTER/USER_MASTER | self 4)
+user_permit=$(selr 1 "$user" $lv3d/USER_MASTER/USER_MASTER | self 5)
+
+############################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"             |
+	cgi-name -n_ -s_                    |
+	cat                                 > $tmp-name
+ERROR_CHECK
+else
+	:                                   > $tmp-name
+ERROR_CHECK
+fi
+
+############################################################
+# アプリケーション由来情報の取得
+kaisha=$(nameread 会社検索 $tmp-name)
+tenpo_start=$(nameread 店舗コード検索開始 $tmp-name)
+tenpo_end=$(nameread 店舗コード検索終了 $tmp-name)
+# 店舗開始のみ情報がある場合は、店舗開始と店舗終了に同一の店舗を与える
+[ "$tenpo_end" == "_" ] && tenpo_end=$tenpo_start
+kanrino=$(nameread 管理コード $tmp-name)
+#  ソートキー
+sortkey="$(nameread SORTKEY $tmp-name)"
+
+# 検索元情報の取得
+cat $lv3d/SHIKIHO/SHIKIHO           |
+#
+#  1:ID          2:会社             3:店舗コード       4:管理番号  5:契約先     
+#  6:契約名称    7:敷金保証金区分   8:建設協力金番号   9:番号      10:金額_円   
+#  11:返済条件   12:返済期間_開始日 13:返済期間_終了日 14:償還条件 15:初回方法  
+#  16:初回償還額 17:定期方法        18:定期償還額      19:最終方法 20:最終償還額
+#  21:削除F      22:更新日時       
+
+selr --through "_" 2 "$kaisha"      | # 会社検索
+if [ "$tenpo_start" == "_" ];then			# 店舗開始検索
+        cat
+else
+        uawk '$3>="'$tenpo_start'"'
+fi                                  |
+uawk '$3<="'$tenpo_end'"'           | # 店舗終了検索
+selr --through "_" 4 "$kanrino"			| # 管理番号で検索
+
+# 契約管理・使用状態が解約と店舗マスタ・使用状態が解約は削除
+cjoin2 key=2/4 <(cat $lv3d/KEIYAKU/KEIYAKU | self 2 3 4 6 | msort key=1/3) -  |
+# 5:契約管理・使用状態
+cjoin2 key=2/3 <(cat $lv3d/TENPO_MASTER/TENPO_MASTER | self 2 4 5 | msort key=1/2) -  |
+# 4:店舗マスタ・使用状態  6:契約管理・使用状態
+delr 4 007                          | # 解約を削除
+delr 6 007                          | # 解約を削除
+delf 4 6                            | # 店舗マスタ・使用状態、契約管理・使用状態を削除
+
+self 1/2 4 3 5/20  2 3              |
+#
+#  1:ID          2:会社             3:管理番号         4:店舗コード 5:契約先
+#  6:契約名称    7:敷金保証金区分   8:建設協力金番号   9:番号       10:金額_円
+#  11:返済条件   12:返済期間_開始月 13:返済期間_終了月 14:償還条件  15:初回方法
+#  16:初回償還額 17:定期方法        18:定期償還額      19:最終方法  20:最終償還額
+#  21:会社       22:店舗コード
+
+cjoin2 key=21/22 $lv3d/TBL/KAISHA_TENPOCO_NAME	|
+delf 21 22																			|
+#
+#  1:ID          2:会社             3:管理番号         4:店舗コード 5:契約先
+#  6:契約名称    7:敷金保証金区分   8:建設協力金番号   9:番号       10:金額_円
+#  11:返済条件   12:返済期間_開始月 13:返済期間_終了月 14:償還条件  15:初回方法
+#  16:初回償還額 17:定期方法        18:定期償還額      19:最終方法  20:最終償還額
+#  21:店舗名
+
+fsed 's/_/209912/12' 's/_/209912/13'  				  | # 契約中、且つ、空白の場合は2099/12をセット
+awk '{print $0,'${today}','${today_yymm}'}'    	|
+#  21:店舗名 22:本日 23:今月
+mdate -f 23m 12m                    |
+self 1/12 14/NF 13                  |
+#  21:店舗名 22:本日 23:今月 24:返済済期間
+lcalc '$0,$16>0?1:0,$20>0?1:0'      |
+#  21:店舗名         22:本日 23:今月 24:返済済期間 25:初回償還フラグ
+#  26:最終償還フラグ
+lcalc '$0,$18>0?($10-$16-$20)/$18+$25+$26:$25+$26'      |
+#  21:店舗名         22:本日 23:今月 24:返済済期間 25:初回償還フラグ
+#  26:最終償還フラグ 27:分母
+awk '{if($23>=$12){print $0,1,$16}else{print $0,0,0}}'  |
+#  21:店舗名         22:本日 23:今月           24:返済済期間     25:初回償還フラグ
+#  26:最終償還フラグ 27:分母 28:初回償還済回数 29:初回償還済金額
+#awk '{if($23>=$12&&$24>0){print $0,$24,$18*$24}else{print $0,0,0}}' |
+awk '{if($23>=$12&&$24>0&&$18>0){print $0,$24,$18*$24}else{print $0,0,0}}' |
+#  21:店舗名         22:本日 23:今月           24:返済済期間     25:初回償還フラグ
+#  26:最終償還フラグ 27:分母 28:初回償還済回数 29:初回償還済金額 30:定期償還済回数
+#  31:定期償還済金額
+awk '{if($23>=$12&&$23>=$13){print $0,$27,$10}else{print $0,$28+$30,$29+$31}}'  |
+#  21:店舗名         22:本日         23:今月           24:返済済期間     25:初回償還フラグ
+#  26:最終償還フラグ 27:分母         28:初回償還済回数 29:初回償還済金額 30:定期償還済回数
+#  31:定期償還済金額 32:全償還済回数 33:全償還済金額
+awk '{if($23>=$12&&$23>=$13){print $0,0}else{print $0,$10-$33}}'  |
+#  21:店舗名         22:本日         23:今月           24:返済済期間     25:初回償還フラグ
+#  26:最終償還フラグ 27:分母         28:初回償還済回数 29:初回償還済金額 30:定期償還済回数
+#  31:定期償還済金額 32:全償還済回数 33:全償還済金額   34:残高
+
+self 1/4 21 5/20 32 27 33 34	|
+msort key=1/2            			|
+#
+#  1:ID          2:会社        3:管理番号         4:店舗コード       5:店舗名
+#  6:契約先      7:契約名称    8:敷金保証金区分   9:建設協力金番号   10:番号
+#  11:金額_円    12:返済条件   13:返済期間_開始月 14:返済期間_終了月 15:償還条件
+#  16:初回方法   17:初回償還額 18:定期方法        19:定期償還額      20:最終方法
+#  21:最終償還額 22:分子       23:分母            24:回収高          25:残高
+
+# 契約先の調整
+cjoin2 key=2/4 <(cat $lv3d/KEIYAKU/KEIYAKU | self 2 4 3 10 12 | msort key=1/3) -	|
+#  1:ID                 2:会社   3:管理番号     4:店舗コード 5:契約管理・契約先
+#  6:契約管理・契約名称 7:店舗名 8:敷保・契約先 9:敷保・契約名称
+
+awk '{$5=="_"?$8=$8:$27>0?$8=$5:$8=$8;print}'		| # 残高がある場合は契約管理・契約先を使用
+awk '{$6=="_"?$9=$9:$27>0?$9=$6:$9=$9;print}'		| # 残高がある場合は契約管理・契約名称を使用
+delf 5 6																				| # 契約管理・契約先、契約管理・契約名称を削除
+
+dayslash --input yyyymm --output yyyy/mm 13 14	|
+comma 11 17 19 21 22 23 24 25                   |
+# 既存データのキー項目に対して変更不可にする属性、classを追加
+strcat -e 0 '"readonly"' '"form-control-readonly"' '"tabindex=\"-1\""'  |
+# デフォルトのソートまたは列ヘッダクリックによるソート
+if [ -n "$sortkey" -a "$sortkey" != "_" ] ; then
+	msort key="$sortkey"
+else
+	msort key=2@4@3@9/10
+fi                                              |
+tee $tmp-gyo																		|
+cat - > $tmp-searech_data
+ERROR_CHECK
+#
+#  1:ID          2:会社        3:管理番号         4:店舗コード       5:店舗名
+#  6:契約先      7:契約名称    8:敷金保証金区分   9:建設協力金番号   10:番号
+#  11:金額_円    12:返済条件   13:返済期間_開始月 14:返済期間_終了月 15:償還条件
+#  16:初回方法   17:初回償還額 18:定期方法        19:定期償還額      20:最終方法
+#  21:最終償還額 22:分子       23:分母            24:回収高          25:残高
+#  26:readonly   27:form-control-readonly         28:tabindex="-1"
+
+# 追加用フィールド作成
+echo "_"                      |
+ransu 28                      |
+yarr                          |
+ransu 5		                    |
+cat                           > $tmp-plus_gyo
+ERROR_CHECK
+
+# 表示データ作成
+cat $tmp-searech_data $tmp-plus_gyo	|
+juni                                |
+maezero 1.6                         > $tmp-data
+ERROR_CHECK
+
+# エラーメッセージ
+if [ $(gyo $tmp-gyo) -eq 0 ]; then
+        error_class=""
+        error_msg="検索該当がありません"
+#        : > $tmp-data
+else
+        error_class="d-none"
+        error_msg=""
+fi
+
+cat << FIN > $tmp-error_calsed
+###エラーメッセージクラス### $error_class
+###エラーメッセージ### $error_msg
+FIN
+
+# 送信情報の作成
+cat $htmd/SHIKIHO.HTML                                                                                            |
+sed -n '/検索テーブルA/,/検索テーブルB/p'                                                                         |
+mojihame -l###会社リスト### - <(cat $lv3d/TBL/KAISHA_NAME | selr --through 001 1 "$user_kaisha"  | msort key=NF)  |
+mojihame -l###契約名称リスト### - <(cat $lv3d/TBL/KEIYAKU_MEISHO_NAME | msort key=NF)                             |
+mojihame -l###敷金保証金区分リスト### - <(cat $lv3d/TBL/SHIKIHO_KUBUN_NAME | msort key=NF)                        |
+mojihame -l###返済条件リスト### - <(cat $lv3d/TBL/HENSAI_JOKEN_NAME | msort key=NF)                               |
+mojihame -l###償還条件リスト### - <(cat $lv3d/TBL/HENSAI_JOKEN_NAME | msort key=NF)                               |
+mojihame -l###償還方法リスト### - <(cat $lv3d/TBL/SHOUKANHOHO_NAME | msort key=NF)                                |
+mojihame -l###償還方法リスト2### - <(cat $lv3d/TBL/SHOUKANHOHO_NAME | msort key=NF)         |
+mojihame -l###償還方法リスト3### - <(cat $lv3d/TBL/SHOUKANHOHO_NAME | msort key=NF)                               |
+mojihame -l###敷金保証金建設協力金情報### - $tmp-data                                                             |
+#calsed -f $tmp-error_calsed                                                                                      |
+cat                                                                                                               > $tmp-ajax
+ERROR_CHECK
+
+############################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+cat $tmp-ajax
+
+############################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0
+
+

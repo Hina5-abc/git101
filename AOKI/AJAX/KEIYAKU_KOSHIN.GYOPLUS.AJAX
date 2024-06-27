@@ -1,0 +1,123 @@
+#!/usr/bin/bash -vx
+#
+# KEIYAKU_KOSHIN.GYOPLUS.AJAX
+#
+# 契約管理更新入力 行追加  AJAX
+#
+# 作成者: t-kaida@usp-lab.com
+# 作成日: 2022/09/28
+#
+##################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+##################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv3d=$homd/DATA/LV3
+comd=$homd/APP/COMMON/HTML
+tmp=/tmp/tmp-$$
+
+##################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+##################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+##################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"             |
+	cgi-name -n_ -s_                    |
+	cat                                 > $tmp-name
+ERROR_CHECK
+else
+	:                                   > $tmp-name
+ERROR_CHECK
+fi
+##################################################
+# アプリケーション由来情報の取得
+
+# 表示情報の作成
+cat $tmp-name                                                      						|
+name-tag                                                           						|
+tagself	敷金保証金区分 敷保金額 返済条件 返済開始月 返済終了月								\
+				償還初回方法 償還初回償還額 償還定期方法 償還定期償還額 償還最終方法	\
+				償還最終償還額 回数分子 回数分母 回収高 回収残高											\
+				建設協力金番号 敷保枝番														      							|
+#
+#  1:敷金保証金区分  2:金額_円    3:返済条件 4:返済期間_開始日 5:返済期間_終了日
+#  6:初回方法        7:初回償還額 8:定期方法 9:定期償還額      10:最終方法
+#  11:最終償還額     12:分子      13:分母    14:回収高         15:残高
+#  16:建設協力金番号 17:敷保枝番
+
+# ヘッダー排除
+sed 1d									|
+tee $tmp-post_data			|
+# 登録なしの場合は排除
+delr 1 "_"							|
+cat                     > $tmp-check_data
+ERROR_CHECK
+
+if [ -s $tmp-check_data ];then
+        # 追加分
+        #strcat 1/6 \"_\" \"_\"  \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" \"_\" 18 \"_\" \"bg-plus\"	|
+				echo _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ bg-plus	|
+				#
+				#  1:敷金保証金区分  2:金額_円    3:返済条件 4:返済期間_開始日 5:返済期間_終了日
+				#  6:初回方法        7:初回償還額 8:定期方法 9:定期償還額      10:最終方法
+				#  11:最終償還額     12:分子      13:分母    14:回収高         15:残高
+				#  16:建設協力金番号 17:枝番      18:class
+
+        # 現在表示分と追加分のマージ
+        cat $tmp-check_data -	|
+        fpad "_" 18           |
+        juni                  |
+        #  1:NO              2:敷金保証金区分  3:金額_円    4:返済条件 5:返済期間_開始日
+        #  6:返済期間_終了日 7:初回方法        8:初回償還額 9:定期方法 10:定期償還額
+        #  11:最終方法       12:最終償還額     13:分子      14:分母    15:回収高
+        #  16:残高           17:建設協力金番号 18:枝番      19:class
+        cat 									> $tmp-data
+ERROR_CHECK
+else
+        cat $tmp-post_data 		> $tmp-data
+ERROR_CHECK
+fi
+
+# 送信情報の作成
+cat $htmd/KEIYAKU_KOSHIN.HTML                                      		|
+sed -n '/敷金保証金建設協力金START/,/敷金保証金建設協力金END/p'    		|
+mojihame -l###敷金保証金区分リスト### - $lv3d/TBL/SHIKIHO_KUBUN_NAME  |
+mojihame -l###返済条件リスト### - $lv3d/TBL/HENSAI_JOKEN_NAME         |
+mojihame -l###償還方法リスト### - $lv3d/TBL/SHOUKANHOHO_NAME          |
+mojihame -l###償還方法リスト2### - $lv3d/TBL/SHOUKANHOHO_NAME         |
+mojihame -l###償還方法リスト3### - $lv3d/TBL/SHOUKANHOHO_NAME         |
+mojihame -l###敷金保証金建設協力金情報### - $tmp-data                 |
+cat                                                                   > $tmp-ajax
+ERROR_CHECK
+
+##################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+cat $tmp-ajax
+
+#################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0

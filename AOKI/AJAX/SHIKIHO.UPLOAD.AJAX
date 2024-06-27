@@ -1,0 +1,388 @@
+#!/usr/bin/bash -vx
+############################################################
+#
+# SHIKIHO.UPLOAD.AJAX
+#
+# 敷金保証金建設協力金情報 ファイルアップロード実行 AJAX
+#
+# 作成者: t-kaida@usp-lab.com
+# 作成日: 2022/11/17
+#
+############################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+############################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+tbld=$homd/TBL
+sysd=$homd/SYS
+lv1d=$homd/DATA/LV1
+lv2d=$homd/DATA/LV2
+lv3d=$homd/DATA/LV3
+lv4d=$apld/LV4
+sesd=$homd/SESSION
+comd=$homd/APP/COMMON/HTML
+tpld=$apld/TEMPLATE
+tmp=/tmp/tmp-$(basename $0).$(date +'%Y%m%d_%H%M%S').$$
+
+today=$(date +%Y%m%d)
+todayhms=$(date +%Y%m%d%H%M%S)
+
+############################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+############################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+############################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"                       |
+	cat                                           > $tmp-name
+ERROR_CHECK
+else
+	:                                             > $tmp-name
+ERROR_CHECK
+fi
+
+############################################################
+#----------------------------------------
+# アップロードファイル取得
+#----------------------------------------
+mime-read 更新ファイル $tmp-name > $tmp-upload_file
+ERROR_CHECK
+
+#----------------------------------------
+# 結果ダウンロードファイル名
+#----------------------------------------
+file_name="SHIKIHO.UPLOAD.RESULT_${todayhms}_$$.xlsx"
+
+#----------------------------------------
+# ヘッダー作成
+#----------------------------------------
+yarr <<FIN > $tmp-header
+NO 会社 管理番号 店舗コード 店舗名
+契約先 契約名称 敷金保証金区分 建設協力金番号 枝番
+金額 返済条件 開始月 終了月 初回方法
+初回償還額 定期方法 定期償還額 最終方法 最終償還額
+分子 分母 回収高 残高
+FIN
+
+rex 1 $tmp-upload_file	|
+self 1/23              	| # エラー内容以外を取得
+#  1:会社      2:管理番号       3:店舗コード     4:店舗名      5:契約先
+#  6:契約名称  7:敷金保証金区分 8:建設協力金番号 9:枝番        10:金額
+#  11:返済条件 12:開始月        13:終了月        14:初回方法   15:初回償還額
+#  16:定期方法 17:定期償還額    18:最終方法      19:最終償還額 20:分子
+#  21:分母     22:回収高        23:残高
+
+sed -e "1,2d"          	| # ヘッダー削除
+juni                   	| # NO付与
+#  1:NO          2:会社      3:管理番号       4:店舗コード     5:店舗名
+#  6:契約先      7:契約名称  8:敷金保証金区分 9:建設協力金番号 10:枝番
+#  11:金額       12:返済条件 13:開始月        14:終了月        15:初回方法
+#  16:初回償還額 17:定期方法 18:定期償還額    19:最終方法      20:最終償還額
+#  21:分子       22:分母     23:回収高        24:残高
+
+tee $tmp-koshin_data   	|
+cat $tmp-header -      	| # ヘッダー連結
+cat											> $tmp-tag_data
+ERROR_CHECK
+
+#**************************************************
+# エラーチェック
+#**************************************************
+#----------------------------------------
+# エラーファイルの初期化
+#----------------------------------------
+:> $tmp-error
+
+if [ -s $tmp-koshin_data ];then
+	#----------------------------------------
+	# 必須項目のチェック
+	#----------------------------------------
+	cat <<-FIN > $tmp-check_need
+  会社
+  店舗コード
+  管理番号
+  建設協力金番号
+  枝番
+  金額
+	FIN
+
+	cktag_need $tmp-check_need $tmp-tag_data 2>$tmp-need_error >/dev/null
+	if [ $? -ne 0 ]; then
+		cat $tmp-need_error          		|
+		strcat 1 2+\"は必須項目です\"  	>> $tmp-error
+		ERROR_CHECK
+	fi
+
+  #----------------------------------------
+  # 日付のチェック
+  #----------------------------------------
+  self 1/NF <<- FIN > $tmp-check_date
+	開始月 yyyymm
+	終了月 yyyymm
+	FIN
+
+  cat $tmp-tag_data |
+  # 日付形式をyyyymmddへ変換
+  tagdayslash --input yyyy/m --output yyyymm 開始月 終了月 |
+  cktag_date $tmp-check_date - 2>$tmp-date_error >/dev/null
+  if [ $? -ne 0 ]; then
+    cat $tmp-date_error                        |
+    strcat 1 2+\"の日付形式に誤りがあります\"  >> $tmp-error
+    ERROR_CHECK
+  fi
+
+	#----------------------------------------
+	# マスタ存在チェック
+	#----------------------------------------
+	cat $lv3d/TENPO_MASTER/TENPO_MASTER	|
+	self 4															|
+	cat - > $tmp-tenpocode								# 店舗コード一覧
+
+	cat $lv3d/TENPO_MASTER/TENPO_MASTER	|
+	self 7															|
+	cat - > $tmp-tenpomei									# 店舗名一覧
+
+	self 1/NF <<- FIN > $tmp-check_inlist
+	会社            $lv3d/TBL/KAISHA_SORT
+	店舗コード      $tmp-tenpocode
+	店舗名          $tmp-tenpomei
+	敷金保証金区分  $lv3d/TBL/SHIKIHO_KUBUN_SORT
+	返済条件        $lv3d/TBL/HENSAI_JOKEN_SORT
+	初回方法        $lv3d/TBL/SHOUKANHOHO_SORT
+	定期方法        $lv3d/TBL/SHOUKANHOHO_SORT
+	最終方法        $lv3d/TBL/SHOUKANHOHO_SORT
+	FIN
+
+	cktag_inlist $tmp-check_inlist $tmp-tag_data >/dev/null 2>$tmp-inlist_error
+	if [ $? -ne 0 ]; then
+		cat $tmp-inlist_error                  |
+		strcat 1 2+\"がマスタに存在しません\"  >> $tmp-error
+		ERROR_CHECK
+	fi
+
+	#----------------------------------------
+	# 会社、店舗コード、管理番号、建設協力金番号、枝番の重複チェック
+	#----------------------------------------
+	cat $tmp-tag_data           														|
+	tagself 会社 店舗コード 管理番号 建設協力金番号 枝番 NO	|
+	#  1:会社 2:店舗コード 3:管理番号 4:建設協力金番号 5:枝番 6:NO
+	sed 1d                      														| # ヘッダー排除
+	msort key=1/5               														|
+	yarr num=5                  														|
+	uawk 'NF!=6'                														|
+	yarr -1 num=5               														|
+	#  1:会社 2:店舗コード 3:管理番号 4:建設協力金番号 5:枝番 6:NO
+	cat                         														> $tmp-chofuku_error
+	ERROR_CHECK
+	
+	if [ -s $tmp-chofuku_error ];then
+		cat $tmp-chofuku_error                  							|
+		strcat 6 \"会社＋店舗コード＋管理番号＋建設協力金番号＋枝番が重複しています\"	|
+		cat                                    								>> $tmp-error
+	ERROR_CHECK
+	fi
+fi
+
+#**************************************************
+# アップロード結果を作成
+#**************************************************
+if [ -s $tmp-error ];then
+	cat $tmp-error                  |
+	msort key=1                     |
+	yarr -d, num=1                  |
+	#  1:No 2:エラー内容
+	cjoin2 key=1 - $tmp-koshin_data	|
+	#
+	#  1:NO          2:エラー内容  3:会社      4:管理番号       5:店舗コード
+	#  6:店舗名      7:契約先      8:契約名称  9:敷金保証金区分 10:建設協力金番号
+	#  11:枝番       12:金額       13:返済条件 14:開始月        15:終了月
+	#  16:初回方法   17:初回償還額 18:定期方法 19:定期償還額    20:最終方法
+	#  21:最終償還額 22:分子       23:分母     24:回収高        25:残高
+
+	self 1 3/NF 2
+else
+	ucat $tmp-koshin_data 		|
+	strcat 0 \"_\"
+fi |
+#
+#  1:NO          2:会社      3:管理番号       4:店舗コード     5:店舗名
+#  6:契約先      7:契約名称  8:敷金保証金区分 9:建設協力金番号 10:枝番
+#  11:金額       12:返済条件 13:開始月        14:終了月        15:初回方法
+#  16:初回償還額 17:定期方法 18:定期償還額    19:最終方法      20:最終償還額
+#  21:分子       22:分母     23:回収高        24:残高          25:エラー内容
+
+tee $tmp-send_data_check  									|
+fsed 's/_/取込完了/25'    									| # 正常データのエラー内容を書き換え
+msort key=2/4@9/10        									|
+strcat 0 \"\'\"             								| # 数字を文字列認識させるためシングルクオートを追加
+strcat -e 2 26+3 26+4 5/8 26+9 26+10 11/NF	|
+
+#----------------------------------------
+# エラーリストをLV4へ保存し、画面よりダウンロード可能にする
+#----------------------------------------
+wex -s_ $tpld/SHIKIHO.xlsx 敷金保証金建設協力金情報 A3 - |
+cat - > $lv4d/$file_name
+ERROR_CHECK
+
+#**************************************************
+## 正常データ登録処理
+#**************************************************
+ucat $tmp-send_data_check                                         |
+#
+#  1:NO          2:会社      3:管理番号       4:店舗コード     5:店舗名
+#  6:契約先      7:契約名称  8:敷金保証金区分 9:建設協力金番号 10:枝番
+#  11:金額       12:返済条件 13:開始月        14:終了月        15:初回方法
+#  16:初回償還額 17:定期方法 18:定期償還額    19:最終方法      20:最終償還額
+#  21:分子       22:分母     23:回収高        24:残高          25:エラー内容
+
+selr NF "_"                                                       | # 正常データのみ取得
+#----------------------------------------
+# 文字列をコード変換
+#----------------------------------------
+# 会社
+cjoin2 key=2 <(cat $lv3d/TBL/KAISHA_NAME | lineup 2 1) -          |
+delf 2                                                            |
+# 敷金保証金区分
+cjoin2 key=8 <(cat $lv3d/TBL/SHIKIHO_KUBUN_NAME | lineup 2 1) -	|
+delf 8                                                           	|
+# 返済条件
+cjoin2 key=12 <(cat $lv3d/TBL/HENSAI_JOKEN_NAME | lineup 2 1) -  |
+delf 12                                                           |
+# 初回方法
+cjoin2 key=15 <(cat $lv3d/TBL/SHOUKANHOHO_NAME | lineup 2 1) -  	|
+delf 15                                                           |
+# 定期方法
+cjoin2 key=17 <(cat $lv3d/TBL/SHOUKANHOHO_NAME | lineup 2 1) -  	|
+delf 17                                                           |
+# 最終方法
+cjoin2 key=19 <(cat $lv3d/TBL/SHOUKANHOHO_NAME | lineup 2 1) -  	|
+delf 19                                                           |
+cat                                                               > $tmp-send_data
+ERROR_CHECK
+#
+#  1:NO          2:会社      3:管理番号       4:店舗コード     5:店舗名
+#  6:契約先      7:契約名称  8:敷金保証金区分 9:建設協力金番号 10:枝番
+#  11:金額       12:返済条件 13:開始月        14:終了月        15:初回方法
+#  16:初回償還額 17:定期方法 18:定期償還額    19:最終方法      20:最終償還額
+#  21:分子       22:分母     23:回収高        24:残高          25:エラー内容
+
+# 登録データが存在する場合
+if [ -s $tmp-send_data ];then
+	#----------------------------------------
+	# 登録情報の作成
+	#----------------------------------------
+	# 既存データと新規データの判別
+  ucat $lv3d/SHIKIHO/SHIKIHO  |
+  self 2 3 4 8 9 1            |
+	msort key=1/5								|
+  #  1:会社名 2:店舗コード 3:管理番号 4:建設協力金番号 5:枝番 6:ID 
+  cjoin2 key=26/30 - <(cat $tmp-send_data | self 0 2 4 3 9 10)	|
+	self 31 2/25								|
+  tee $tmp-kizon              |
+  selr 1 "_"                 	|
+  cat                        	> $tmp-id_mitouroku
+  ERROR_CHECK
+	#
+	#  1:ID          2:会社      3:管理番号       4:店舗コード     5:店舗名
+	#  6:契約先      7:契約名称  8:敷金保証金区分 9:建設協力金番号 10:枝番
+	#  11:金額       12:返済条件 13:開始月        14:終了月        15:初回方法
+	#  16:初回償還額 17:定期方法 18:定期償還額    19:最終方法      20:最終償還額
+	#  21:分子       22:分母     23:回収高        24:残高          25:エラー内容
+
+  if [ -s $tmp-id_mitouroku ];then
+    gyosu=$(gyo $tmp-id_mitouroku)
+
+    # ID採番
+    getno $gyosu $tbld/GETNO/SHIKIHO > $tmp-shinki_id
+
+		ycat $tmp-shinki_id $tmp-id_mitouroku	|
+		delf 2																|
+    cat                                   > $tmp-shinki
+    ERROR_CHECK
+  else
+    : > $tmp-shinki
+  fi
+
+  cat $tmp-kizon                          |
+  delr 1 "_"                              |
+  ucat - $tmp-shinki          						|
+	#
+	#  1:ID          2:会社      3:管理番号       4:店舗コード     5:店舗名
+	#  6:契約先      7:契約名称  8:敷金保証金区分 9:建設協力金番号 10:枝番
+	#  11:金額       12:返済条件 13:開始月        14:終了月        15:初回方法
+	#  16:初回償還額 17:定期方法 18:定期償還額    19:最終方法      20:最終償還額
+	#  21:分子       22:分母     23:回収高        24:残高          25:エラー内容
+
+	dayslash --input yyyy/mm 13                       | # 日付整形
+	dayslash --input yyyy/mm 14                       | # 日付整形
+	maezero 10.2                                      | # 枝番に前ゼロ
+	fsed 's/,//11' 's/,//16' 's/,//18' 's/,//20'      | # 数値部分、カンマ排除
+	fsed 's/_/0/11' 's/_/0/16' 's/_/0/18' 's/_/0/20'	| # 数値部分、ブランクは 0 に
+	fsed 's/_/209912/13' 's/_/209912/43'              | # 年月部分、ブランクは 209912 に
+
+	strcat	 1  2  4  3  6					\
+					 7  8  9 10 11					\
+					12 13 14 \"_\" 15				\
+					16 17 18 19 20					\
+					 \"0\" \"${todayhms}\"	|
+  #
+	#  1:ID          2:会社             3:店舗コード       4:管理番号  5:契約先
+	#  6:契約名称    7:敷金保証金区分   8:建設協力金番号   9:番号      10:金額_円
+	#  11:返済条件   12:返済期間_開始日 13:返済期間_終了日 14:償還条件 15:初回方法
+	#  16:初回償還額 17:定期方法        18:定期償還額      19:最終方法 20:最終償還額
+	#  21:削除F      22:更新日時
+
+	msort key=1/4@8/9     					|
+	cat                             > $tmp-lv1
+	ERROR_CHECK
+	
+	# LV1ディレクトリ作成
+	mkdir -p $lv1d/SHIKIHO/"$today"
+	ERROR_CHECK
+	   
+	# LV1へ保存
+	mv $tmp-lv1 $lv1d/SHIKIHO/"$today"/SHIKIHO_"$todayhms"_$$
+	ERROR_CHECK
+	   
+	# 整理バッチ
+	$sysd/DATAMASTER.SHIKIHO $today 1> /dev/null 2> /dev/null
+	ERROR_CHECK
+else
+	:
+fi
+
+##################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+if [ -s $tmp-error ];then
+	echo "ng"
+else
+	echo "ok"
+fi
+echo -n $file_name
+
+#################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0

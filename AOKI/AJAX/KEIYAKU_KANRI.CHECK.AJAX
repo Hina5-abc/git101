@@ -1,0 +1,313 @@
+#!/usr/bin/bash -vx
+######################################################################
+#
+# KEIYAKU_KANRI.CHECK.AJAX
+#
+# 契約管理 チェック AJAX
+#
+# 作成者: t-kaida@usp-lab.com
+# 作成日: 2022/10/05
+#
+######################################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+######################################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv3d=$homd/DATA/LV3
+comd=$homd/APP/COMMON/HTML
+tmp=/tmp/tmp-$(basename $0).$(date +'%Y%m%d_%H%M%S').$$
+
+######################################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+######################################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+######################################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"             |
+	cgi-name -n_ -s_                    |
+	cat                                 > $tmp-name
+ERROR_CHECK
+else
+	:                                   > $tmp-name
+ERROR_CHECK
+fi
+
+######################################################################
+#----------------------------------------
+# 入力有無チェックファイル作成
+#----------------------------------------
+echo "_"                                                                   |
+ransu 103                                                                  |
+yarr                                                                       |
+cat                                                                        > $tmp-check_file
+ERROR_CHECK
+
+#----------------------------------------
+# nameファイル整形
+#----------------------------------------
+# レコードに一つも入力がない場合は排除
+cat $tmp-name                                                              |
+fsed 's/_/ /1'                                                             |
+uawk 'NF=="3"'                                                             |
+msort key=1                                                                |
+map num=1                                                                  |
+tateyoko                                                                   |
+tee $tmp-oyako_check                                                       |
+tagdelr 削除 true																													 | # 削除行はチェック対象外に
+tagdelf "NO" "削除"                     																	 |
+delr 1 "999999"                                                            | 
+calsed "false" "_"																												 | # 子オーナー解約Fの値を"_"へ変換
+cjoin0 +ng key=2/103 $tmp-check_file 2>&1 > /dev/null                      |
+unmap num=1                                                                |
+strcat 2+\"_\"+1 3                                                         |
+cat                                                                        > $tmp-check_name
+ERROR_CHECK
+
+#----------------------------------------
+# エラーファイルの初期化
+#----------------------------------------
+:> $tmp-error
+
+# 賃料改定情報 親子関係チェック（紐づく賃料改定情報がある場合は削除をさせない）
+cat $tmp-oyako_check                              |
+tagselr 削除 "true"                               |
+tagself "会社" "店舗コード" "管理番号" "NO"       |
+sed 1d                                            |
+#  1:会社 2:店舗コード 3:管理番号 4:NO
+# 会社、店舗コード、管理番号のいずれかが空のものを除去
+cond '$1 != "_" && $2 != "_" && $3 != "_"'        |
+msort key=1/3                                     |
+cjoin1 key=1/3 - $lv3d/CHINRYOKAITE/CHINRYOKAITE  |
+lineup 4                                          |
+# 1:NO
+cat                                               > $tmp-chinryokaite_oyako_error
+ERROR_CHECK
+
+# 敷金保証金建設協力金 親子関係チェック（紐づくしきほ情報がある場合は削除をさせない）
+cat $tmp-oyako_check                         |
+tagselr 削除 "true"                          |
+tagself "会社" "店舗コード" "管理番号" "NO"  |
+sed 1d                                       |
+#  1:会社 2:店舗コード 3:管理番号 4:NO
+# 会社、店舗コード、管理番号のいずれかが空のものを除去
+cond '$1 != "_" && $2 != "_" && $3 != "_"'   |
+msort key=1/3                                |
+cjoin1 key=2/4 - $lv3d/SHIKIHO/SHIKIHO       |
+lineup 5                                     |
+# 1:NO
+cat                                          > $tmp-shikiho_oyako_error
+ERROR_CHECK
+
+if [ -s $tmp-chinryokaite_oyako_error -o -s $tmp-shikiho_oyako_error ];then
+  ucat $tmp-chinryokaite_oyako_error $tmp-shikiho_oyako_error  |
+	lineup 1                                                     |
+  strcat \"削除_\"+1 \"賃料情報または敷金情報が存在します\"    |
+  cat                                                         >> $tmp-error
+ERROR_CHECK
+fi
+
+if [ -s $tmp-check_name ];then
+	
+	#----------------------------------------
+	# 必須項目チェック
+	#----------------------------------------
+	self 1/NF <<- FIN                                                          > $tmp-need
+	会社
+	業態
+	使用状態
+	管理番号
+	オーナCD
+	オーナCD枝番
+	店舗コード
+	契約名称
+	賃貸借関係
+	契約種類
+	物件名
+	FIN
+	
+	check_need_name $tmp-need $tmp-check_name                                  > $tmp-need_error
+	if [ $? -ne 0 ];then
+	        cat $tmp-need_error                                                |
+	        strcat 1 \"必須項目です\"                                          |
+	        cat                                                               >> $tmp-error
+	ERROR_CHECK
+	fi
+
+	#----------------------------------------
+	# 日付チェック
+	#----------------------------------------
+	self 1/NF <<- FIN > $tmp-date
+	OPEN日             D
+	契約日             D
+	原契約期間開始日   D
+	原契約期間満了日   D
+	更新契約期間満了日 D
+	次回改定日         D
+	FIN
+	
+	## POSTデータより日付をyyyy/mm/dd → yyyymmdd へ変換
+	cat $tmp-check_name       |
+	fsed 's./..2'             |
+	# チェック処理
+	check_date_name $tmp-date > $tmp-date_error
+	
+	if [ $? -ne "0" ];then
+	        cat $tmp-date_error                   |
+	        strcat 1 \"日付形式に誤りがあります\" |
+	        cat                                   >> $tmp-error
+	ERROR_CHECK
+	fi
+
+	#----------------------------------------
+	# マスタ存在チェック
+	#----------------------------------------
+	self 1/NF <<- FIN                                                        	 > $tmp-inlist
+	会社
+	FIN
+	
+	check_inlist_name $tmp-inlist $tmp-check_name                            	 > $tmp-inlist_error
+	if [ $? -ne 0 ];then
+	        cat $tmp-inlist_error                                            	 |
+	        strcat \"会社_\"+1 \"が存在しません\"                            	 |
+	        cat                                                             	>> $tmp-error
+	ERROR_CHECK
+	fi
+	
+	#----------------------------------------
+	# 店舗コードの存在チェック
+	#----------------------------------------
+	cat $tmp-check_name                                               				 |
+	nameread -le '会社|店舗コード'                                    				 |
+	#  1:name 2:value
+	fsed 's/_/ /1'                                                    				 |
+	self 2 3                                                          				 |
+	#  1:NO 2:value
+	# フィールド形式へ変更
+	yarr num=1                                                        				 |
+	#  1:NO 2:会社コード 3:店舗コード
+	cjoin1 +ng2 key=2/3 $lv3d/TBL/KAISHA_TENPOCO_NAME 2>&1 >/dev/null 				 |
+	strcat \"店舗コード_\"+1 \"が存在しません\"                       				 |
+	cat                                                               				>> $tmp-error
+	ERROR_CHECK
+	
+	#----------------------------------------
+	## 会社、店舗コード、管理番号のユニークチェック
+	#----------------------------------------
+	# 登録済みのID、会社、店舗コード、管理番号を取得
+	#  1:ID                2:会社              3:店舗コード         4:管理番号          5:業態              
+	#  6:使用状態          7:担当者            8:オーナーCD         9:オーナーCD_枝番   10:契約先           
+	#  11:個人法人区分     12:契約名称         13:賃貸借関係        14:契約種類         15:物件名           
+	#  16:OPEN日           17:契約日           18:契約期間開始日    19:原契約期間満了日 20:契約期間満了日   
+	#  21:次回改定日       22:改定条件         23:更新条件          24:更新予告         25:更新手数料       
+	#  26:自動更新         27:解約予告         28:解約条件          29:明渡条件         30:契約敷地面積     
+	#  31:契約敷地合計     32:契約延床面積     33:契約先コード      34:契約形態         35:都道府県名       
+	#  36:摘要             37:交渉履歴         38:主キー項目        39:オーナーCD2      40:オーナーCD枝番2  
+	#  41:オーナーCD2解約F 42:オーナーCD3      43:オーナーCD枝番3   44:オーナーCD3解約F 45:オーナーCD4      
+	#  46:オーナーCD枝番4  47:オーナーCD4解約F 48:オーナーCD5       49:オーナーCD枝番5  50:オーナーCD5解約F 
+	#  51:オーナーCD6      52:オーナーCD枝番6  53:オーナーCD6解約F  54:オーナーCD7      55:オーナーCD枝番7  
+	#  56:オーナーCD7解約F 57:オーナーCD8      58:オーナーCD枝番8   59:オーナーCD8解約F 60:オーナーCD9      
+	#  61:オーナーCD枝番9  62:オーナーCD9解約F 63:オーナーCD10      64:オーナーCD枝番10 65:オーナーCD10解約F
+	#  66:オーナーCD11     67:オーナーCD枝番11 68:オーナーCD11解約F 69:削除F            70:更新日時         
+	cat $lv3d/KEIYAKU/KEIYAKU                                        |
+	strcat 1 2 3 4 \"_\"                                                    |
+	#  1:ID 2:会社 3:店舗コード 4:管理番号 5:NO
+	cat                                                                     > $tmp-keiyaku_lv3
+	ERROR_CHECK
+	
+	cat $tmp-name                                                              |
+	fsed 's/_/ /1'                                                             |
+	# ID,会社,オーナーCDに絞り込み
+	uawk '$1=="ID" || $1=="会社"  || $1=="店舗コード" || $1=="管理番号" || $1=="削除"'  |
+	self 2 3                                                                   |
+	#  1:NO 2:value
+	yarr num=1                                                                 |
+	#  1:NO   2:ID 3:会社 4:管理番号 5:店舗コード
+	#  6:削除
+	cond 'NF eq 6'                                                             |
+	# 会社が空白のものを除去
+	delr 3 "_"                                                                 |
+	# 削除フラグがtrueのものはチェック対象外
+	delr 6 "true"                                                              |
+	self 2/3 5 4 1                                                             |
+	#  1:ID 2:会社 3:店舗コード 4:管理番号 5:NO
+	tee $tmp-shinki_check                                                      |
+	# 新規情報は排除
+	delr 1 "_"                                                                 |
+	msort key=1                                                                |
+	upl key=1 $tmp-keiyaku_lv3                                                 |
+	cat                                                                        > $tmp-keiyaku_old
+	ERROR_CHECK
+	
+	#----------------------------------------
+	# 新規登録分の取得
+	#----------------------------------------
+	#  1:ID 2:会社 3:店舗コード 4:管理番号 5:NO
+	cat $tmp-shinki_check                                                      |
+	selr 1 "_"                                                                 |
+	uawk '!($2=="_" && $3=="_" && $4=="_")'                                    |
+	# 過去登録済み情報と新規情報の登録
+	cat $tmp-keiyaku_old -                                                     |
+	self 2 3 4 5                                                               |
+	#  1:会社 2:店舗コード 3:管理番号 4:NO
+	msort key=1/3                                                              |
+	yarr num=3                                                                 |
+	uawk 'NF!=4'                                                               |
+	yarr -1 num=3                                                              |
+	#  1:会社 2:店舗コード 3:管理番号 4:NO
+	# 既存データ同士の重複は除外
+	delr NF "_"                                                                |
+	strcat \"管理番号\"+\"_\"+4 \"管理番号が重複しています\"                  >> $tmp-error
+	ERROR_CHECK
+
+fi
+
+#----------------------------------------
+# 送信ファイルの作成
+#----------------------------------------
+if [ -s $tmp-error ];then
+  cat $tmp-error    |
+  fsed 's/_/ /1'    |
+  #  1:項目 2:No 3:エラー内容
+  lineup 2          |
+  #  1:No
+  yarr              |
+  tr " " ","        |
+  cat - $tmp-error  |
+  cat               > $tmp-ajax
+  ERROR_CHECK
+else
+  echo -n "ok"      > $tmp-ajax
+  ERROR_CHECK
+fi
+
+######################################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+cat $tmp-ajax
+
+######################################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0
+

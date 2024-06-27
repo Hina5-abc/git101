@@ -1,0 +1,291 @@
+#!/usr/bin/bash -vx
+#
+# OWNER_MASTER.CHECK.AJAX
+#
+# オーナーマスタ チェック AJAX
+#
+# 作成者: h-kato@usp-lab.com
+# 作成日: 2022/09/28
+#
+##################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+##################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv3d=$homd/DATA/LV3
+comd=$homd/APP/COMMON/HTML
+tmp=/tmp/tmp-$$
+
+##################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+##################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+##################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"             |
+	cgi-name -n_ -s_                    |
+	cat                                 > $tmp-name
+ERROR_CHECK
+else
+	:                                   > $tmp-name
+ERROR_CHECK
+fi
+
+##################################################
+# 入力有無チェックファイル作成
+echo "_"                                                                   |
+ransu 64                                                                   |
+yarr                                                                       |
+cat                                                                        > $tmp-check_file
+ERROR_CHECK
+
+# nameファイル整形
+# レコードに一つも入力がない場合は排除
+cat $tmp-name                                         |
+fsed 's/_/ /1'                                        |
+tee /tmp/ka |
+uawk 'NF=="3"'                                        |
+tee /tmp/kb |
+msort key=1                                           |
+map num=1                                             |
+tateyoko                                              |
+tee $tmp-oyako_check                                  |
+tagdelr 削除 "true"                                   |
+tagdelf "NO" "削除"                                   |
+delr 1 "999999"                                       |
+cjoin0 +ng key=2/64 $tmp-check_file 2>&1 > /dev/null  |
+unmap num=1                                           |
+strcat 2+\"_\"+1 3                                    |
+cat                                                   > $tmp-check_name
+ERROR_CHECK
+
+# エラーファイルの初期化
+:> $tmp-error
+
+## 親子関係チェック（店舗コードに紐づく契約がある場合は削除をさせない）
+# 契約情報のオーナー情報取得（子オーナー含む）
+#  1:ID                2:会社              3:店舗コード         4:管理番号          5:業態              
+#  6:使用状態          7:担当者            8:オーナーCD         9:オーナーCD_枝番   10:契約先           
+#  11:個人法人区分     12:契約名称         13:賃貸借関係        14:契約種類         15:物件名           
+#  16:OPEN日           17:契約日           18:契約期間開始日    19:原契約期間満了日 20:契約期間満了日   
+#  21:次回改定日       22:改定条件         23:更新条件          24:更新予告         25:更新手数料       
+#  26:自動更新         27:解約予告         28:解約条件          29:明渡条件         30:契約敷地面積     
+#  31:契約敷地合計     32:契約延床面積     33:契約先コード      34:契約形態         35:都道府県名       
+#  36:摘要             37:交渉履歴         38:主キー項目        39:オーナーCD2      40:オーナーCD枝番2  
+#  41:オーナーCD2解約F 42:オーナーCD3      43:オーナーCD枝番3   44:オーナーCD3解約F 45:オーナーCD4      
+#  46:オーナーCD枝番4  47:オーナーCD4解約F 48:オーナーCD5       49:オーナーCD枝番5  50:オーナーCD5解約F 
+#  51:オーナーCD6      52:オーナーCD枝番6  53:オーナーCD6解約F  54:オーナーCD7      55:オーナーCD枝番7  
+#  56:オーナーCD7解約F 57:オーナーCD8      58:オーナーCD枝番8   59:オーナーCD8解約F 60:オーナーCD9      
+#  61:オーナーCD枝番9  62:オーナーCD9解約F 63:オーナーCD10      64:オーナーCD枝番10 65:オーナーCD10解約F
+#  66:オーナーCD11     67:オーナーCD枝番11 68:オーナーCD11解約F 69:削除F            70:更新日時         
+cat $lv3d/KEIYAKU/KEIYAKU                                       |
+self 2 8/9 39/40 42/43 45/46 48/49 51/52 54/55 57/58 60/61 63/64    |
+#  1:会社              2:オーナーCD       3:オーナーCD_枝番   4:オーナーCD2      5:オーナーCD枝番2
+#  6:オーナーCD3       7:オーナーCD枝番3  8:オーナーCD4       9:オーナーCD枝番4  10:オーナーCD5
+#  11:オーナーCD枝番5  12:オーナーCD6     13:オーナーCD枝番6  14:オーナーCD7     15:オーナーCD枝番7
+#  16:オーナーCD8      17:オーナーCD枝番8 18:オーナーCD9      19:オーナーCD枝番9 20:オーナーCD10
+#  21:オーナーCD枝番10 22:オーナーCD11    23:オーナーCD枝番11
+msort key=1                                                     |
+tarr -2 num=1                                                   |
+#  1:会社 2:オーナーCD 3:オーナーCD_枝番
+lineup 1/3                                                      |
+cat                                                             > $tmp-owner_list
+ERROR_CHECK
+
+cat $tmp-oyako_check                                  |
+tagselr 削除 "true"                                   |
+tagself "会社" "オーナーCD" "オーナーCD枝番" "NO"     |
+sed 1d                                                |
+#  1:会社 2:オーナーCD 3:オーナーCD枝番 4:NO
+# 会社、オーナーCD、オーナーCD枝番のいずれかが空のものを除去
+cond '$1 != "_" && $2 != "_" && $3 != "_"'            |
+msort key=1/3                                         |
+# 紐づく契約情報があるかチェック
+cjoin1 key=1/3 - $tmp-owner_list                      |
+lineup 4                                              |
+# 1:NO
+cat                                                   > $tmp-oyako_error
+ERROR_CHECK
+
+if [ -s $tmp-oyako_error ];then
+  cat $tmp-oyako_error                         |
+  strcat \"削除_\"+1 \"契約情報が存在します\"  |
+  cat                                         >> $tmp-error
+ERROR_CHECK
+fi
+
+if [ -s $tmp-check_name ];then
+
+	# 必須項目チェック
+	self 1/NF <<- FIN                                                          > $tmp-need
+	会社
+	オーナーCD枝番
+	FIN
+	
+	check_need_name $tmp-need $tmp-check_name                                  > $tmp-need_error
+	if [ $? -ne 0 ];then
+	        cat $tmp-need_error                                                |
+	        strcat 1 \"必須項目です\"                                          |
+	        cat                                                               >> $tmp-error
+	ERROR_CHECK
+	fi
+	
+	# 会社名、氏名のどちらかは必須
+	cat $tmp-check_name                                                        |
+	sed 's/_/ /1'                                                              |
+	# 会社名と氏名のみ絞り込み
+	uawk '$1=="会社名" || $1=="氏名"'                                          |
+	#  1:name 2:NO　 3:value
+	self 2 1 3                                                                 |
+	#  1:NO　 2:name 3:value
+	msort key=1                                                                |
+	yarr num=1                                                                 |
+	uawk '$3=="_" && $5=="_"'                                                  |
+	yarr -2 num=1                                                              |
+	strcat 2+\"_\"+1 \"必須項目です\"                                          |
+	cat                                                                       >> $tmp-error
+	ERROR_CHECK
+	
+	# 属性チェック
+	self 1/NF <<- FIN                                                          > $tmp-attr_name
+	オーナーCD枝番 n2
+	FIN
+	
+	check_attr_name $tmp-attr_name $tmp-check_name                             > $tmp-attr_name_error
+	if [ $? -ne 0 ];then
+	        cat $tmp-attr_name_error                                           |
+	        strcat 1 \"値が不正です\"                                          |
+	        cat                                                               >> $tmp-error
+	ERROR_CHECK
+	fi
+	
+	
+	# マスタ存在チェック
+	#  1:会社CD 2:会社名
+	cat $lv3d/TBL/KAISHA_NAME |
+	self 1                    |
+	#  1:会社CD
+	cat                       > $tmp-kaisha_name
+	
+	self 1/NF <<- FIN      > $tmp-inlist
+	会社 $tmp-kaisha_name
+	FIN
+	
+	check_inlist_name $tmp-inlist $tmp-check_name                              > $tmp-inlist_name
+	if [ $? -ne 0 ];then
+	        cat $tmp-inlist_name                                               |
+	        strcat 1 \"マスタに存在しません\"                                  |
+	        cat                                                               >> $tmp-error
+	ERROR_CHECK
+	fi
+	
+	## 会社、オーナーCD、オーナーCD枝番のユニークチェック
+	# 登録済みのID、会社、オーナーCD、オーナーCD枝番を取得
+	cat $lv3d/OWNER_MASTER/OWNER_MASTER                                        |
+	#  1:ID                  2:会社                3:オーナーCD           4:オーナーCD枝番        5:オーナー会社名
+	#  6:役職名              7:氏名                8:郵便番号             9:住所_1                10:住所_2
+	#  11:TEL                12:携帯               13:メールアドレス      14:備考欄               15:書類送付先
+	#  16:連絡先関係         17:連絡先会社名       18:連絡先役職名        19:連絡先氏名           20:連絡先郵便番号
+	#  21:連絡先住所_1       22:連絡先住所_2       23:連絡先TEL           24:連絡先携帯           25:連絡先メールアドレス
+	#  26:お中元お歳暮会社名 27:お中元お歳暮役職名 28:お中元お歳暮氏名    29:お中元お歳暮郵便番号 30:お中元お歳暮住所_1
+	#  31:お中元お歳暮住所_2 32:お中元お歳暮TEL    33:お中元お歳暮携帯    34:連絡先備考           35:契約種類
+	#  36:契約先区分         37:お中元_お歳暮品目  38:お中元_お歳暮送付先 39:お中元備考           40:契約先コード
+	#  41:県名               42:マイナンバー       43:事業者              44:摘要                 45:削除F
+	#  46:更新日時
+	strcat 1 2 3 4 \"_\"                                                    |
+	#  1:ID 2:会社 3:オーナーCD 4:オーナーCD枝番 5:NO
+	cat                                                                     > $tmp-owner_lv3
+	ERROR_CHECK
+	
+	cat $tmp-name                                                              |
+	fsed 's/_/ /1'                                                             |
+	# ID,会社,オーナーCDに絞り込み
+	uawk '$1=="ID" || $1=="会社"  || $1=="オーナーCD" || $1=="オーナーCD枝番" || $1=="削除"'  |
+	self 2 3                                                                   |
+	#  1:NO 2:value
+	yarr num=1                                                                 |
+	#  1:NO   2:ID 3:会社 4:オーナーCD 5:オーナーCD枝番
+	#  6:削除
+	cond 'NF eq 6'                                                             |
+	# 会社が空白のものを除去
+	delr 3 "_"                                                                 |
+	# 削除フラグがtrueのものはチェック対象外
+	delr 6 "true"                                                              |
+	self 2/5 1                                                                 |
+	#  1:ID 2:会社 3:オーナーCD 4:オーナーCD枝番 5:NO
+	tee $tmp-shinki_check                                                      |
+	# 新規情報は排除
+	delr 1 "_"                                                                 |
+	msort key=1                                                                |
+	upl key=1 $tmp-owner_lv3                                                   |
+	cat                                                                        > $tmp-owner_old
+	ERROR_CHECK
+	
+	# 新規登録分の取得
+	#  1:ID 2:会社 3:オーナーCD 4:オーナーCD枝番 5:NO
+	cat $tmp-shinki_check                                                      |
+	selr 1 "_"                                                                 |
+	uawk '!($2=="_" && $3=="_" && $4=="_")'                                    |
+	# 過去登録済み情報と新規情報の登録
+	cat $tmp-owner_old -                                                       |
+	self 2 3 4 5                                                                |
+	#  1:会社 2:オーナーCD 3:オーナーCD枝番 4:NO
+	msort key=1/3                                                              |
+	yarr num=3                                                                 |
+	uawk 'NF!=4'                                                               |
+	yarr -1 num=3                                                              |
+	#  1:会社 2:オーナーCD 3:オーナーCD枝番 4:NO
+	# 既存データ同士の重複は除外
+	delr NF "_"                                                                |
+	strcat \"オーナーCD枝番\"+\"_\"+4 \"重複\"                                     >> $tmp-error
+	ERROR_CHECK
+
+fi
+
+# 送信ファイルの作成
+if [ -s $tmp-error ];then
+	cat $tmp-error    |
+	fsed 's/_/ /1'    |
+	#  1:項目 2:No 3:エラー内容
+	lineup 2          |
+	#  1:No
+	yarr              |
+	tr " " ","        |
+	cat - $tmp-error  |
+  cat               > $tmp-ajax
+
+ERROR_CHECK
+else
+  echo -n "ok"      > $tmp-ajax
+ERROR_CHECK
+fi
+##################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+cat $tmp-ajax
+
+#################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0

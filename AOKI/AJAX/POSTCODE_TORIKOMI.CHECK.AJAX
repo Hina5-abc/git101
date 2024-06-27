@@ -1,0 +1,100 @@
+#!/usr/bin/bash -vx
+#
+# POSTCODE_TORIKOMI.CHECK.AJAX
+#
+# 郵便番号データ 取込 チェック AJAX
+#
+# 作成者: h-hamasaki@usp-lab.com
+# 作成日: 2022/11/07
+#
+##################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+##################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv3d=$homd/DATA/LV3
+comd=$homd/APP/COMMON/HTML
+tmp=/tmp/tmp-$$
+
+# 変数指定
+today=$(date +%Y%m%d)
+todayym=$(date +%Y%m)
+
+##################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+##################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+##################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"             |
+	cat                                 > $tmp-mime
+ERROR_CHECK
+else
+	:                                   > $tmp-mime
+ERROR_CHECK
+fi
+
+##################################################
+# メインプロセス
+
+
+# エラーファイル初期化
+: > $tmp-error
+
+mime-read "取込ファイル" $tmp-mime                        |
+uconv -stou -Lu                                           |
+uawk 'length($0)>0'                                       |        
+gyo                                                       >$tmp-gyo
+ERROR_CHECK
+
+if [ $(cat $tmp-gyo) -eq 0 ];then
+   echo "【取込みエラー】ファイルが空です"                >$tmp-error
+else	 
+   mime-read "取込ファイル" $tmp-mime                     |
+   uconv -stou -Lu                                        |
+   fromcsv                                                |
+   retu                                                   |
+   lineup 1                                               |
+   awk '{if($1!=15){print "【取込みエラー】項目数が違います"}}'  >$tmp-error
+fi	 
+ERROR_CHECK
+
+# 送信ファイルの作成
+if [ -s $tmp-error ];then
+   cat $tmp-error     > $tmp-ajax
+ERROR_CHECK
+else
+echo -n "ok"    > $tmp-ajax
+ERROR_CHECK
+fi
+
+##################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+cat $tmp-ajax
+
+#################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0

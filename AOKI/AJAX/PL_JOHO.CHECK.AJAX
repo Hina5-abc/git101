@@ -1,0 +1,145 @@
+#!/usr/bin/bash -vx
+#
+# PL_JOHO.CHECK.AJAX
+#
+# PL情報 入力値チェック AJAX
+#
+# 作成者: h-kato@usp-lab.com
+# 作成日: 2022/11/21
+#
+##################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+##################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv3d=$homd/DATA/LV3
+comd=$homd/APP/COMMON/HTML
+tmp=/tmp/tmp-$$
+
+##################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+##################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+##################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"                       |
+	cgi-name -n_ -s_                              |
+	cat                                           > $tmp-name
+ERROR_CHECK
+else
+	:                                             > $tmp-name
+ERROR_CHECK
+fi
+
+##################################################
+# 入力有無チェックファイル作成
+echo "_"                                              |
+ransu 33                                              |
+yarr                                                  |
+cat                                                   > $tmp-check_file
+ERROR_CHECK
+
+
+# nameファイル整形
+# レコードに一つも入力がない場合は排除
+cat $tmp-name                                         |
+fsed 's/_/ /1'                                        |
+uawk 'NF=="3"'                                        |
+msort key=1                                           |
+map num=1                                             |
+tateyoko                                              |
+tagdelr 削除 "true"                                   |
+tagdelf "NO" "削除"                                   |
+delr 1 "999999"                                       |
+cjoin0 +ng key=2/NF $tmp-check_file 2>&1 > /dev/null  |
+unmap num=1                                           |
+strcat 2+\"_\"+1 3                                    |
+cat                                                   > $tmp-check_name
+ERROR_CHECK
+
+# エラーファイルの初期化
+:> $tmp-error
+
+if [ -s $tmp-check_name ];then
+	
+	# 必須項目のチェック
+	self 1/NF <<- FIN                                     > $tmp-need
+	会社
+	店舗CD
+	会計年度
+	区分
+	FIN
+	
+	check_need_name $tmp-need $tmp-check_name             > $tmp-need_error
+	if [ $? -ne 0 ];then
+		cat $tmp-need_error                           |
+		strcat 1 \"必須項目です\"                     |
+		cat                                          >> $tmp-error
+	fi
+	
+	# 会社、店舗コード、会計年度、区分の重複チェック
+  ucat $tmp-check_name                               |
+  fsed 's/_/ /1'                                     |
+	msort key=1                                        |
+  map num=1                                          |
+  fsed 's/*/NO/1'                                    |
+  tateyoko                                           |
+	tagself 会社 店舗CD 会計年度 区分 NO               |
+	#  1:会社 2:店舗CD 3:会計年度 4:区分 5:NO
+	# ヘッダー排除
+	sed 1d                                             |
+	msort key=1/4                                      |
+	yarr num=4                                         |
+	uawk 'NF!=5'                                       |
+	yarr -1 num=4                                      |
+	#  1:会社 2:店舗CD 3:会計年度 4:区分 5:NO
+	strcat \"店舗CD\"+\"_\"+5 \"重複\"                 >> $tmp-error
+	ERROR_CHECK
+fi
+
+if [ -s $tmp-error ];then
+	cat $tmp-error    |
+	fsed 's/_/ /1'    |
+	#  1:項目 2:No 3:エラー内容
+	lineup 2          |
+	#  1:No
+	yarr              |
+	tr " " ","        |
+	cat - $tmp-error  |
+	cat               > $tmp-ajax
+ERROR_CHECK
+else
+	echo -n "ok"      > $tmp-ajax
+ERROR_CHECK
+fi
+
+##################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+cat $tmp-ajax
+
+#################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0

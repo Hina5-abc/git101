@@ -1,0 +1,334 @@
+#!/usr/bin/bash -vx
+############################################################
+#
+# CHINRYO_KAITE.UPLOAD.AJAX
+#
+# 賃料改定履歴 ファイルアップロード実行 AJAX
+#
+# 作成者: t-kaida@usp-lab.com
+# 作成日: 2022/11/14
+#
+############################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+############################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+tbld=$homd/TBL
+sysd=$homd/SYS
+lv1d=$homd/DATA/LV1
+lv2d=$homd/DATA/LV2
+lv3d=$homd/DATA/LV3
+lv4d=$apld/LV4
+sesd=$homd/SESSION
+comd=$homd/APP/COMMON/HTML
+tpld=$apld/TEMPLATE
+tmp=/tmp/tmp-$(basename $0).$(date +'%Y%m%d_%H%M%S').$$
+
+today=$(date +%Y%m%d)
+todayhms=$(date +%Y%m%d%H%M%S)
+
+############################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+############################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+############################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"                       |
+	cat                                           > $tmp-name
+ERROR_CHECK
+else
+	:                                             > $tmp-name
+ERROR_CHECK
+fi
+
+############################################################
+#----------------------------------------
+# アップロードファイル取得
+#----------------------------------------
+mime-read 更新ファイル $tmp-name > $tmp-upload_file
+ERROR_CHECK
+
+#----------------------------------------
+# 結果ダウンロードファイル名
+#----------------------------------------
+file_name="CHINRYO_KAITE.UPLOAD.RESULT_${todayhms}_$$.xlsx"
+
+#----------------------------------------
+# ヘッダー作成
+#----------------------------------------
+yarr <<FIN > $tmp-header
+NO 会社 管理番号 店舗コード 店舗名
+契約先 契約名称 回数 更新日 賃料
+管理費 駐車料 その他 消費税 税区分
+相殺額 月額支払額 改定内容 支払方法 歩合
+FIN
+
+rex 1 $tmp-upload_file	|
+self 1/19              	| # エラー内容以外を取得
+#
+#  1:会社        2:管理番号  3:店舗コード 4:店舗名      5:契約先 
+#  6:契約名称    7:回数      8:更新日     9:賃料        10:管理費
+#  11:駐車料     12:その他   13:消費税    14:税区分 15:相殺額 
+#  16:月額支払額 17:改定内容 18:支払方法  19:歩合 
+
+sed -e "1,2d"          	| # ヘッダー削除
+juni                   	| # NO付与
+#
+#  1:NO      2:会社        3:管理番号  4:店舗コード 5:店舗名
+#  6:契約先  7:契約名称    8:回数      9:更新日     10:賃料
+#  11:管理費 12:駐車料     13:その他   14:消費税    15:税区分
+#  16:相殺額 17:月額支払額 18:改定内容 19:支払方法  20:歩合
+
+tee $tmp-koshin_data   	|
+cat $tmp-header -      	| # ヘッダー連結
+cat											> $tmp-tag_data
+ERROR_CHECK
+
+#**************************************************
+# エラーチェック
+#**************************************************
+#----------------------------------------
+# エラーファイルの初期化
+#----------------------------------------
+:> $tmp-error
+
+if [ -s $tmp-koshin_data ];then
+	#----------------------------------------
+	# 必須項目のチェック
+	#----------------------------------------
+	cat <<-FIN > $tmp-check_need
+	会社
+	店舗コード
+	管理番号
+	更新日
+	税区分
+	FIN
+
+	cktag_need $tmp-check_need $tmp-tag_data 2>$tmp-need_error >/dev/null
+	if [ $? -ne 0 ]; then
+		cat $tmp-need_error          		|
+		strcat 1 2+\"は必須項目です\"  	>> $tmp-error
+		ERROR_CHECK
+	fi
+
+	#----------------------------------------
+	# マスタ存在チェック
+	#----------------------------------------
+	cat $lv3d/TENPO_MASTER/TENPO_MASTER	|
+	self 4															|
+	cat - > $tmp-tenpocode								# 店舗コード一覧
+
+	cat $lv3d/TENPO_MASTER/TENPO_MASTER	|
+	self 7															|
+	cat - > $tmp-tenpomei									# 店舗名一覧
+
+	self 1/NF <<- FIN > $tmp-check_inlist
+	会社        $lv3d/TBL/KAISHA_SORT
+	店舗コード  $tmp-tenpocode
+	店舗名      $tmp-tenpomei
+	税区分      $lv3d/TBL/SHOHIZEI_KUBUN_SORT
+	支払方法    $lv3d/TBL/SHIHARAIHOHO_SORT
+	FIN
+
+	cktag_inlist $tmp-check_inlist $tmp-tag_data >/dev/null 2>$tmp-inlist_error
+	if [ $? -ne 0 ]; then
+		cat $tmp-inlist_error                  |
+		strcat 1 2+\"がマスタに存在しません\"  >> $tmp-error
+		ERROR_CHECK
+	fi
+
+  #----------------------------------------
+  # 日付のチェック
+  #----------------------------------------
+  self 1/NF <<- FIN > $tmp-check_date
+	更新日 yyyymmdd
+	FIN
+
+  cat $tmp-tag_data |
+  # 日付形式をyyyymmddへ変換
+  tagdayslash --input yyyy/m/d --output yyyymmdd 更新日 |
+  cktag_date $tmp-check_date - 2>$tmp-date_error >/dev/null
+  if [ $? -ne 0 ]; then
+    cat $tmp-date_error                        |
+    strcat 1 2+\"の日付形式に誤りがあります\"  >> $tmp-error
+    ERROR_CHECK
+  fi
+
+	#----------------------------------------
+	# 会社、店舗コード、管理番号、更新日の重複チェック
+	#----------------------------------------
+	cat $tmp-tag_data           								|
+	tagself 会社 店舗コード 管理番号 更新日	NO	|
+	#  1:会社 2:店舗コード 3:管理番号 4:更新日 5:NO
+	sed 1d                      								| # ヘッダー排除
+	msort key=1/4               								|
+	yarr num=4                  								|
+	uawk 'NF!=5'                								|
+	yarr -1 num=4               								|
+	#  1:会社 2:店舗コード 3:管理番号 4:更新日 5:NO
+	cat                         								> $tmp-chofuku_error
+	ERROR_CHECK
+	
+	if [ -s $tmp-chofuku_error ];then
+		cat $tmp-chofuku_error                  	|
+		strcat 5 \"会社＋店舗コード＋管理番号＋更新日が重複しています\"	|
+		cat                                    		>> $tmp-error
+	ERROR_CHECK
+	fi
+fi
+
+#**************************************************
+# アップロード結果を作成
+#**************************************************
+if [ -s $tmp-error ];then
+	cat $tmp-error                  |
+	msort key=1                     |
+	yarr -d, num=1                  |
+	#  1:No 2:エラー内容
+	cjoin2 key=1 - $tmp-koshin_data	|
+	#
+	#  1:NO          2:エラー内容 3:会社        4:管理番号  5:店舗コード
+	#  6:店舗名      7:契約先     8:契約名称    9:回数      10:更新日
+	#  11:賃料       12:管理費    13:駐車料     14:その他   15:消費税
+	#  16:消費税区分 17:相殺額    18:月額支払額 19:改定内容 20:支払方法
+	#  21:歩合
+	self 1 3/NF 2
+else
+	ucat $tmp-koshin_data 		|
+	strcat 0 \"_\"
+fi |
+#
+#  1:NO      2:会社        3:管理番号  4:店舗コード 5:店舗名
+#  6:契約先  7:契約名称    8:回数      9:更新日     10:賃料
+#  11:管理費 12:駐車料     13:その他   14:消費税    15:税区分
+#  16:相殺額 17:月額支払額 18:改定内容 19:支払方法  20:歩合
+#  21:エラー内容
+
+tee $tmp-send_data_check  	|
+fsed 's/_/取込完了/21'    	| # 正常データのエラー内容を書き換え
+msort key=2@4@3@8         	|
+strcat 0 \"\'\"             | # 数字を文字列認識させるためシングルクオートを追加
+strcat -e 2 22+3 22+4 5/21	|
+
+#----------------------------------------
+# エラーリストをLV4へ保存し、画面よりダウンロード可能にする
+#----------------------------------------
+wex -s_ $tpld/CHINRYO_KAITE.xlsx 賃料改定履歴 A3 - |
+cat - > $lv4d/$file_name
+ERROR_CHECK
+
+#**************************************************
+## 正常データ登録処理
+#**************************************************
+ucat $tmp-send_data_check                                         |
+#
+#  1:NO      2:会社        3:管理番号  4:店舗コード 5:店舗名
+#  6:契約先  7:契約名称    8:回数      9:更新日     10:賃料
+#  11:管理費 12:駐車料     13:その他   14:消費税    15:税区分
+#  16:相殺額 17:月額支払額 18:改定内容 19:支払方法  20:歩合
+#  21:エラー内容
+
+selr NF "_"                                                       | # 正常データのみ取得
+#----------------------------------------
+# 文字列をコード変換
+#----------------------------------------
+# 会社
+cjoin2 key=2 <(cat $lv3d/TBL/KAISHA_NAME | lineup 2 1) -          |
+delf 2                                                            |
+# 税区分
+cjoin2 key=15 <(cat $lv3d/TBL/SHOHIZEI_KUBUN_NAME | lineup 2 1) -	|
+delf 15                                                           |
+# 支払方法
+cjoin2 key=19 <(cat $lv3d/TBL/SHIHARAIHOHO_NAME | lineup 2 1) -  	|
+delf 19                                                           |
+cat                                                               > $tmp-send_data
+ERROR_CHECK
+#
+#  1:NO      2:会社        3:管理番号  4:店舗コード 5:店舗名
+#  6:契約先  7:契約名称    8:回数      9:更新日     10:賃料
+#  11:管理費 12:駐車料     13:その他   14:消費税    15:税区分
+#  16:相殺額 17:月額支払額 18:改定内容 19:支払方法  20:歩合
+#  21:エラー内容
+
+# 登録データが存在する場合
+if [ -s $tmp-send_data ];then
+	#----------------------------------------
+	# 登録情報の作成
+	#----------------------------------------
+	cat $tmp-send_data                             |
+	#
+	#  1:NO      2:会社        3:管理番号  4:店舗コード 5:店舗名
+	#  6:契約先  7:契約名称    8:回数      9:更新日     10:賃料
+	#  11:管理費 12:駐車料     13:その他   14:消費税    15:税区分
+	#  16:相殺額 17:月額支払額 18:改定内容 19:支払方法  20:歩合
+	#  21:エラー内容
+
+	dayslash --input yyyy/mm/dd 9                                                   	| # 日付整形
+	fsed 's/,//10' 's/,//11' 's/,//12' 's/,//13' 's/,//14' 's/,//16' 's/,//17'    		| # 数値部分、カンマ排除
+	fsed 's/_/0/10' 's/_/0/11' 's/_/0/12' 's/_/0/13' 's/_/0/14' 's/_/0/16' 's/_/0/17'	| # 数値部分、ブランクは 0 に
+	fsed 's/_/001/19'																																	| # 支払方法がブランクの場合は"月払"に
+
+	strcat 	2   4  3  9  6							\
+					7  10 11 12 13							\
+					14 15 16 17 18							\
+					19 20 \"_\" \"${todayhms}\"	|
+  #				 
+	#  1:会社      2:店舗コード  3:管理番号  4:更新日      5:契約先
+	#  6:契約名称  7:賃料        8:管理費    9::駐車料      10:その他
+	#  11:消費税   12:消費税区分 13:相殺額   14:月額支払額 15:改定内容
+	#  16:支払方法 17:歩合       18:削除F    19:更新日時
+
+	msort key=1/4                       |
+	cat                                 > $tmp-lv1
+	ERROR_CHECK
+	
+	# LV1ディレクトリ作成
+	mkdir -p $lv1d/CHINRYOKAITE/"$today"
+	ERROR_CHECK
+	   
+	# LV1へ保存
+	mv $tmp-lv1 $lv1d/CHINRYOKAITE/"$today"/CHINRYOKAITE_"$todayhms"_$$
+	ERROR_CHECK
+	   
+	# 整理バッチ
+	$sysd/DATAMASTER.CHINRYOKAITE $today 1> /dev/null 2> /dev/null
+	ERROR_CHECK
+else
+	:
+fi
+
+##################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+if [ -s $tmp-error ];then
+	echo "ng"
+else
+	echo "ok"
+fi
+echo -n $file_name
+
+#################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0

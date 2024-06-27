@@ -1,0 +1,212 @@
+#!/usr/bin/bash -vx
+############################################################
+#
+# CHINRYO_KAITE.SEARCH.AJAX
+#
+# 賃料改定履歴 検索 AJAX
+#
+# 作成者: t-kaida@usp-lab.com
+# 作成日: 2022/10/18
+#
+############################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+############################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv3d=$homd/DATA/LV3
+comd=$homd/APP/COMMON/HTML
+sesd=$homd/SESSION
+tmp=/tmp/tmp-$(basename $0).$(date +'%Y%m%d_%H%M%S').$$
+
+############################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+############################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+##################################################
+# セッション確認
+echo $HTTP_COOKIE                                                  |
+sed 's/; */\n/g'                                                   |
+sed -n 's/=/ /p'                                                   |
+cat                                                                > $tmp-cookie
+ERROR_CHECK
+
+session=$(nameread KEY $tmp-cookie)
+
+check_session $session                                             > $tmp-session_check
+ERROR_CHECK
+
+# user情報
+user=$(selr 1 "user" $sesd/SESSION.$session | self 2)
+user_name=$(selr 1 "$user" $lv3d/TBL/USER_USERNAME | self 2)
+user_kaisha=$(selr 1 "$user" $lv3d/USER_MASTER/USER_MASTER | self 4)
+user_permit=$(selr 1 "$user" $lv3d/USER_MASTER/USER_MASTER | self 5)
+
+############################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"             |
+	cgi-name -n_ -s_                    |
+	cat                                 > $tmp-name
+ERROR_CHECK
+else
+	:                                   > $tmp-name
+ERROR_CHECK
+fi
+
+############################################################
+# アプリケーション由来情報の取得
+kaisha=$(nameread 会社検索 $tmp-name)
+tenpo_start=$(nameread 店舗コード検索開始 $tmp-name)
+tenpo_end=$(nameread 店舗コード検索終了 $tmp-name)
+# 店舗開始のみ情報がある場合は、店舗開始と店舗終了に同一の店舗を与える
+[ "$tenpo_end" == "_" ] && tenpo_end=$tenpo_start
+kanrino=$(nameread 管理コード $tmp-name)
+kaiyaku=$(nameread 解約表示 $tmp-name)
+
+# 検索元情報の取得
+cat $lv3d/CHINRYOKAITE/CHINRYOKAITE |
+#  1:会社      2:店舗コード  3:管理番号 4:更新日      5:契約先   
+#  6:契約名称  7:賃料        8:管理費   9:駐車料      10:その他  
+#  11:消費税   12:消費税区分 13:相殺額  14:月額支払額 15:改定内容
+#  16:支払方法 17:歩合       18:削除F   19:更新日時  
+
+selr --through "_" 1 "$kaisha"			| # 会社検索
+if [ "$tenpo_start" == "_" ];then     # 店舗開始検索
+        cat
+else
+        uawk '$2>="'$tenpo_start'"'
+fi                                  |
+uawk '$2<="'$tenpo_end'"' 					| # 店舗終了検索
+selr --through "_" 3 "$kanrino"     | # 管理番号で検索
+
+# 契約管理・使用状態が解約と店舗マスタ・使用状態が解約は削除
+cjoin2 key=1/3 <(cat $lv3d/KEIYAKU/KEIYAKU | self 2 3 4 6 10 12 | msort key=1/3) -	|
+# 4:契約管理・使用状態 5:契約管理・契約先 6:契約管理・契約名称 7:更新日 8:契約先 9:契約名称
+delr 4 007													| # 解約を削除
+awk '{$8!="_"?$8=$8:$8=$5;print}'		| # 契約先を優先使用
+awk '{$9!="_"?$9=$9:$9=$6;print}'		| # 契約名称を優先使用
+delf 4 5 6													| # :契約管理・使用状態、契約管理・契約先、契約管理・契約名称を削除
+
+cjoin2 key=1/2 <(cat $lv3d/TENPO_MASTER/TENPO_MASTER | self 2 4 5 | msort key=1/2) -	|
+# 3:店舗マスタ・使用状態
+delr 3 007													| # 解約を削除
+delf 3  														| # 店舗マスタ・使用状態を削除
+
+# 内税の場合、税抜き金額を算出し、消費税を置き換え
+cjoin2 +0 key=12 $lv3d/TBL/SHOHIZEI_KUBUN_NAME	|
+# 12:消費税区分 13:消費税区分名称 14:内税外税区分 15:税率 16表示順
+delf 16																					| # 表示順を削除
+lcalc '$[1:10],$14==01?($7+$8+$9+$10)*$15/100:$14==02?($7+$8+$9+$10)/(100+$15)*$15:0,$[12:NF]'	|
+marume -sage 11.0                               | # 内税の場合、算出した賃料合計に少数が含まれることがあるため
+lcalc '$0,$14==01?($7+$8+$9+$10):$14==02?($7+$8+$9+$10)-$11:($7+$8+$9+$10)'	|
+delf 13 14 15                                   | # 13:消費税区分名称 14:内税外税区分 15:税率 を削除
+
+juni key=1/3            | # 回数の付与
+maezero 1.2          		| # 回数は2桁へ
+#
+#  1:回数      2:会社      3:店舗コード  4:管理番号 5:更新日     
+#  6:契約先    7:契約名称  8:賃料        9:管理費   10:駐車料    
+#  11:その他   12:消費税   13:消費税区分 14:相殺額  15:月額支払額
+#  16:改定内容 17:支払方法 18:歩合       19:削除F   20:更新日時  
+
+self 2 3 4 6 7 1 5 8/18 |
+#
+#  1:会社      2:店舗コード 3:管理番号    4:契約先  5:契約名称
+#  6:回数      7:更新日     8:賃料        9:管理費  10:駐車料
+#  11:その他   12:消費税    13:消費税区分 14:相殺額 15:月額支払額
+#  16:改定内容 17:支払方法  18:歩合
+
+cjoin2 key=1/2 $lv3d/TBL/KAISHA_TENPOCO_NAME	| # 店舗名取得
+#
+#  1:会社        2:店舗コード 3:店舗名    4:管理番号    5:契約先
+#  6:契約名称    7:回数       8:更新日    9:賃料        10:管理費
+#  11:駐車料     12:その他    13:消費税   14:消費税区分 15:相殺額
+#  16:月額支払額 17:改定内容  18:支払方法 19:歩合
+
+dayslash yyyy/mm/dd 8   | # 日付整形
+comma 9/13 15 16        | # カンマ整形
+# 既存データのキー項目に対して変更不可にする属性、classを追加
+strcat -e 0 '"readonly"' '"form-control-readonly"' '"tabindex=\"-1\""'	|
+msort key=1/2@4@7       |
+tee $tmp-gyo 												|
+cat                     > $tmp-searech_data
+ERROR_CHECK
+#
+#  1:会社        2:店舗コード 3:店舗名    4:管理番号    5:契約先
+#  6:契約名称    7:回数       8:更新日    9:賃料        10:管理費
+#  11:駐車料     12:その他    13:消費税   14:消費税区分 15:相殺額
+#  16:月額支払額 17:改定内容  18:支払方法 19:歩合       20:readonly
+#  21:form-control-readonly   22:tabindex="-1"
+
+# 追加用フィールド作成
+echo "_"                |
+ransu 22                |
+yarr                    |
+ransu 5		              |
+cat                     > $tmp-plus_gyo
+ERROR_CHECK
+
+# 表示データ作成
+cat $tmp-searech_data $tmp-plus_gyo	|
+juni                                |
+maezero 1.6                         |
+cat - > $tmp-data
+ERROR_CHECK
+
+# エラーメッセージ
+if [ $(gyo $tmp-gyo) -eq 0 ]; then
+        error_class=""
+        error_msg="検索該当がありません"
+#        : > $tmp-data
+else
+        error_class="d-none"
+        error_msg=""
+fi
+
+cat << FIN > $tmp-error_calsed
+###エラーメッセージクラス### $error_class
+###エラーメッセージ### $error_msg
+FIN
+
+# 送信情報の作成
+cat $htmd/CHINRYO_KAITE.HTML                                       											|
+sed -n '/検索テーブルA/,/検索テーブルB/p'                          											|
+mojihame -l###会社リスト### - <(cat $lv3d/TBL/KAISHA_NAME | selr --through 001 1 "$user_kaisha"  | msort key=NF)							|
+mojihame -l###契約名称リスト### - <(cat $lv3d/TBL/KEIYAKU_MEISHO_NAME | msort key=NF)   |
+mojihame -l###消費税区分リスト### - <(cat $lv3d/TBL/SHOHIZEI_KUBUN_NAME | msort key=NF) |
+mojihame -l###支払方法リスト### - <(cat $lv3d/TBL/SHIHARAIHOHO_NAME | msort key=NF)     |
+mojihame -l###賃料改定情報### - $tmp-data                          											|
+#calsed -f $tmp-error_calsed                                                             |
+cat                                                                											> $tmp-ajax
+ERROR_CHECK
+
+############################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+cat $tmp-ajax
+
+############################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0
+

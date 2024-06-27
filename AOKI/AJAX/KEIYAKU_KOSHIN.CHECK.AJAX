@@ -1,0 +1,151 @@
+#!/usr/bin/bash -vx
+######################################################################
+#
+# KEIYAKU_KOSHIN.CHECK.AJAX
+#
+# 契約管理更新入力 チェック AJAX
+#
+# 作成者: t-kaida@usp-lab.com
+# 作成日: 2022/11/01
+#
+######################################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+######################################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv3d=$homd/DATA/LV3
+comd=$homd/APP/COMMON/HTML
+tmp=/tmp/tmp-$(basename $0).$(date +'%Y%m%d_%H%M%S').$$
+
+######################################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+######################################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+######################################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"             |
+	cgi-name -n_ -s_                    |
+	cat                                 > $tmp-name
+ERROR_CHECK
+else
+	:                                   > $tmp-name
+ERROR_CHECK
+fi
+
+######################################################################
+#----------------------------------------
+# エラーファイルの初期化
+#----------------------------------------
+:                                                                          > $tmp-error
+
+#----------------------------------------
+# 必須項目チェック
+#----------------------------------------
+self 1/NF <<- FIN                                                          > $tmp-need
+親オーナーコード
+親オーナー枝番
+契約名称
+契約種類
+FIN
+
+check_need_name $tmp-need $tmp-name                                  > $tmp-need_error
+if [ $? -ne 0 ];then
+        cat $tmp-need_error                                                |
+        strcat 1 \"必須項目です\"                                          |
+        cat                                                               >> $tmp-error
+				ERROR_CHECK
+fi
+
+#----------------------------------------
+# 日付チェック
+#----------------------------------------
+self 1/NF <<- FIN > $tmp-date
+契約日        D
+開店日        D
+基本契約開始  D
+基本契約終了  D
+更新契約終了  D
+次回改定日    D
+FIN
+
+## POSTデータより日付をyyyy/mm/dd → yyyymmdd へ変換
+cat $tmp-name       													|
+fsed 's.-..2'             										|
+# チェック処理
+check_date_name $tmp-date > $tmp-date_error
+
+if [ $? -ne "0" ];then
+        cat $tmp-date_error                   |
+        strcat 1 \"日付形式に誤りがあります\" |
+        cat                                   >> $tmp-error
+ERROR_CHECK
+fi
+
+#----------------------------------------
+# 更新日の重複存在チェック
+#----------------------------------------
+cat $tmp-name                              		|
+nameread -le '前回更新日|更新日|消費税区分2'  |
+yarr																					|
+#  1:前回更新日 2:前回更新日の値  3:今回更新日  4:今回更新日の値  5:今回消費税区分  6:今回消費税区分の値
+tee $tmp-name2																|
+uawk '{
+	if($2==$4){
+		print "[賃料改定経過]前回の更新日と今回の更新日が重複しています"
+	}
+}'																						|
+cat - 																			 >> $tmp-error
+ERROR_CHECK
+
+#----------------------------------------
+# 今回消費税区分の入力チェック
+#----------------------------------------
+cat $tmp-name2																|
+#  1:前回更新日 2:前回更新日の値  3:今回更新日  4:今回更新日の値  5:今回消費税区分  6:今回消費税区分の値
+uawk '{
+	if($4!="_"&&$6=="_"){
+		print "[賃料改定経過]今回の消費税区分は必須項目です"
+	}
+}'																						|
+cat - 																			 >> $tmp-error
+ERROR_CHECK
+
+# 送信ファイルの作成
+if [ -s $tmp-error ];then
+        cat $tmp-error                                                     > $tmp-ajax
+				ERROR_CHECK
+else
+        echo -n "ok"                                                       > $tmp-ajax
+				ERROR_CHECK
+fi
+######################################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+cat $tmp-ajax
+
+######################################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0
+

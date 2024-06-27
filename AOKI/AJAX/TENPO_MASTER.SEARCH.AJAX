@@ -1,0 +1,178 @@
+#!/usr/bin/bash -vx
+#
+# TENPO_MASTER.SEARCH.AJAX
+#
+# 店舗マスタ検索 AJAX
+#
+# 作成者: k-tanaka@usp-lab.com
+# 作成日: 2022/07/11
+#
+##################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+##################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv3d=$homd/DATA/LV3
+comd=$homd/APP/COMMON/HTML
+sesd=$homd/SESSION
+tmp=/tmp/tmp-$$
+
+##################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+##################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+##################################################
+# セッション確認
+echo $HTTP_COOKIE                                                  |
+sed 's/; */\n/g'                                                   |
+sed -n 's/=/ /p'                                                   |
+cat                                                                > $tmp-cookie
+ERROR_CHECK
+
+session=$(nameread KEY $tmp-cookie)
+
+check_session $session                                             > $tmp-session_check
+ERROR_CHECK
+
+# user情報
+user=$(selr 1 "user" $sesd/SESSION.$session | self 2)
+user_name=$(selr 1 "$user" $lv3d/TBL/USER_USERNAME | self 2)
+user_kaisha=$(selr 1 "$user" $lv3d/USER_MASTER/USER_MASTER | self 4)
+user_permit=$(selr 1 "$user" $lv3d/USER_MASTER/USER_MASTER | self 5)
+
+
+##################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"             |
+	cgi-name -n_ -s_                    |
+	cat                                 > $tmp-name
+ERROR_CHECK
+else
+	:                                   > $tmp-name
+ERROR_CHECK
+fi
+
+##################################################
+# アプリケーション由来情報の取得
+kaisha=$(nameread 会社検索 $tmp-name)
+tenpo_start=$(nameread 店舗コード検索開始 $tmp-name)
+tenpo_end=$(nameread 店舗コード検索終了 $tmp-name)
+# 店舗開始のみ情報がある場合は、店舗開始と店舗終了に同一の店舗を与える
+[ "$tenpo_end" == "_" ] && tenpo_end=$tenpo_start
+#  ソートキー
+sortkey="$(nameread SORTKEY $tmp-name)"
+
+# 検索元情報の取得
+#  1:システム店舗NO             2:会社                         3:業態                       4:店舗コード                   5:使用状態                  
+#  6:会計部門コード             7:店舗名                       8:OPEN日                     9:都道府県名                   10:郵便番号                 
+#  11:住所1                     12:住所2                       13:電話番号                  14:契約フォルダ_使用状態       15:契約フォルダ_都道府県    
+#  16:契約フォルダ_店舗コード   17:店舗状態フォルダ_使用状態   18:店舗状態フォルダ_都道府県 19:店舗状態フォルダ_店舗コード 20:店舗履歴フォルダ_使用状態
+#  21:店舗履歴フォルダ_都道府県 22:店舗履歴フォルダ_店舗コード 23:契約形態                  24:店舗タイプ                  25:店舗形態                 
+#  26:売場坪数                  27:摘要                        28:閉店日                    29:解約日                      30:削除F                    
+#  31:更新日時                 
+cat $lv3d/TENPO_MASTER/TENPO_MASTER                                            |
+# 会社検索
+selr --through "_" 2 "$kaisha"                                                 |
+# 店舗開始検索
+if [ "$tenpo_start" == "_" ];then
+	cat
+else
+	uawk '$4>= "'$tenpo_start'"'
+fi                                                                             |
+# 店舗終了検索
+if [ "$tenpo_end" == "_" ];then
+	cat
+else
+	uawk '$4<= "'$tenpo_end'"'
+fi                                                                             |
+# 日付整形
+dayslash yyyy/mm/dd 8 28 29                                                    |
+# 不要項目を除去
+delf 31                                                                        |
+#  1:システム店舗NO             2:会社                         3:業態                        4:店舗コード                   5:使用状態                  
+#  6:会計部門コード             7:店舗名                       8:OPEN日                      9:都道府県名                   10:郵便番号                 
+#  11:住所1                     12:住所2                       13:電話番号                   14:契約フォルダ_使用状態	      15:契約フォルダ_都道府県	   
+#  16:契約フォルダ_店舗コード	  17:店舗状態フォルダ_使用状態	 18:店舗状態フォルダ_都道府県	 19:店舗状態フォルダ_店舗コード 20:店舗履歴フォルダ_使用状態
+#  21:店舗状態フォルダ_都道府県 22:店舗状態フォルダ_店舗コード 23:契約形態	                 24:店舗タイプ                  25:店舗形態                 
+#  26:売場坪数                  27:摘要                        28:閉店日                     29:解約日                      30:削除F                    
+#  デフォルトのソートまたは列ヘッダによるソート
+if [ -n "$sortkey" -a "$sortkey" != "_" ] ; then
+	msort key="$sortkey"
+else
+	msort key=2@4/5
+fi                                                          |
+# 既存データのキー項目に対して変更不可にする属性、classを追加
+strcat -e 0 '"readonly"' '"form-control-readonly"' '"tabindex=\"-1\""'                                |
+#  1:システム店舗NO             2:会社                         3:業態                        4:店舗コード                   5:使用状態                  
+#  6:会計部門コード             7:店舗名                       8:OPEN日                      9:都道府県名                   10:郵便番号                 
+#  11:住所1                     12:住所2                       13:電話番号                   14:契約フォルダ_使用状態	      15:契約フォルダ_都道府県	   
+#  16:契約フォルダ_店舗コード	  17:店舗状態フォルダ_使用状態	 18:店舗状態フォルダ_都道府県	 19:店舗状態フォルダ_店舗コード 20:店舗履歴フォルダ_使用状態
+#  21:店舗状態フォルダ_都道府県 22:店舗状態フォルダ_店舗コード 23:契約形態	                 24:店舗タイプ                  25:店舗形態                 
+#  26:売場坪数                  27:摘要                        28:閉店日                     29:解約日                      30:削除F                    
+#  31:readonly                  32:form-control-readonly       33:tabindex="-1"
+cat                                                                            > $tmp-searech_data
+ERROR_CHECK
+
+# 追加用フィールド作成
+echo "_"   |
+ransu 5    |
+cat        > $tmp-plus_gyo
+ERROR_CHECK
+
+# 表示データ作成
+cat $tmp-searech_data $tmp-plus_gyo |
+juni |
+#  1:No                         2:システム店舗NO             3:会社                         4:業態                       5:店舗コード                  
+#  6:使用状態                   7:会計部門コード             8:店舗名                       9:OPEN日                     10:都道府県名                 
+#  11:郵便番号                  12:住所1                     13:住所2                       14:電話番号                  15:契約フォルダ_使用状態	     
+#  16:契約フォルダ_都道府県	    17:契約フォルダ_店舗コード   18:店舗状態フォルダ_使用状態	  19:店舗状態フォルダ_都道府県 20:店舗状態フォルダ_店舗コード
+#  21:店舗履歴フォルダ_使用状態 22:店舗状態フォルダ_都道府県 23:店舗状態フォルダ_店舗コード 24:契約形態	                 25:店舗タイプ                 
+#  26:店舗形態                  27:売場坪数                  28:摘要                        29:閉店日                    30:解約日                     
+#  31:削除F                     32:readonly                  33:form-control-readonly       34:tabindex="-1"
+maezero 1.6  > $tmp-data
+ERROR_CHECK 
+
+
+# 送信情報の作成
+cat $htmd/TENPO_MASTER.HTML                                                                                       |
+sed -n '/検索テーブルA/,/検索テーブルB/p'                                                                         |
+mojihame -l###会社リスト### - <(cat $lv3d/TBL/KAISHA_NAME | selr --through 001 1 "$user_kaisha"  | msort key=NF)  |
+mojihame -l###業態リスト### - $lv3d/TBL/GYOTAI_NAME                                                               |
+mojihame -l###使用状態リスト### - $lv3d/TBL/SHIYOJOTAI_NAME                                                       |
+mojihame -l###店舗タイプリスト### - $lv3d/TBL/TENPOTYPE_NAME                                                      |
+mojihame -l###店舗形態リスト### - $lv3d/TBL/TENPOKEITAI_NAME                                                      |
+mojihame -l###店舗情報### - $tmp-data                                                                             |
+cat                                                                                                               > $tmp-ajax
+ERROR_CHECK
+
+
+##################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+cat $tmp-ajax
+
+#################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0

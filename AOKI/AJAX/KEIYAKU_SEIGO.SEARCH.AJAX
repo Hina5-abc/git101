@@ -1,0 +1,287 @@
+#!/usr/bin/bash -vx
+#
+# KEIYAKU.SEARCH.AJAX
+#
+# 契約 オーナー 敷金保証金建設協力金情報 賃料改定 整合確認 検索 AJAX
+#
+# 作成者: h-hamasakio@usp-lab.com
+# 作成日: 2022/11/09
+#
+##################################################
+# 変数指定
+export LANG=ja_JP.UTF-8
+export PATH=/home/UTL:/home/TOOL:$PATH
+
+##################################################
+# ディレクトリ指定
+homd=/home/usp_admin
+apld=$homd/APP/KEIYAKU
+logd=$homd/LOG
+htmd=$apld/HTML
+lv3d=$homd/DATA/LV3
+comd=$homd/APP/COMMON/HTML
+tmp=/tmp/tmp-$$
+
+# 変数指定
+tmonth=$(date +%Y%m)
+today_yymm=$(date +%Y%m)
+##################################################
+# 走行ログ
+logfile=$logd/LOG.$(basename $0).$(date +%Y%m%d%H%M%S)
+exec 2> $logfile
+
+##################################################
+# エラーチェック
+ERROR_CHECK(){
+	[ $(plus ${PIPESTATUS[@]}) -eq 0 ] && return
+	# エラー表示のhtmlを表示
+	echo "Content-type:text/html"
+	echo ""
+	echo "エラー"
+	
+	exit 1
+}
+
+##################################################
+# POSTデータ取得
+if [ ! -z "$CONTENT_LENGTH" ];then
+	dd bs="$CONTENT_LENGTH"             |
+	cgi-name -n_ -s_                    |
+	cat                                 > $tmp-name
+ERROR_CHECK
+else
+	:                                   > $tmp-name
+ERROR_CHECK
+fi
+##################################################
+# アプリケーション由来情報の取得
+kaisha=$(nameread 会社検索 $tmp-name)
+tenpo_start=$(nameread 店舗コード検索開始 $tmp-name)
+tenpo_end=$(nameread 店舗コード検索終了 $tmp-name)
+# 店舗開始のみ情報がある場合は、店舗開始と店舗終了に同一の店舗を与える
+[ "$tenpo_end" == "_" ] && tenpo_end=$tenpo_start
+keiyaku=$(nameread 全件表示 $tmp-name)
+diff_display=$(nameread 相違表示 $tmp-name)
+# 検索マスタ　会社名
+cat $lv3d/TBL/KAISHA_NAME           |
+self 1 2                            |
+msort key=1/2                       >$tmp-kaisha_name
+ERROR_CHECK
+# 店舗マスタ　会社名＋店舗コード　
+cat $lv3d/TENPO_MASTER/TENPO_MASTER |
+self 2 4 7                          |
+msort key=1/2                       >$tmp-tenpo_name
+ERROR_CHECK
+# 敷金保証金区分　
+cat $lv3d/TBL/SHIKIHO_KUBUN_NAME    |
+self 1 2                            |
+msort key=1/2                       >$tmp-shikiho_kubun_name
+ERROR_CHECK
+cat $lv3d/OWNER_MASTER/OWNER_MASTER    |
+# オーナー情報の取得
+#  1:ID                  2:会社名              3:オーナーCD           4:オーナーCD枝番        5:オーナー会社名
+#  6:役職名              7:氏名                8:郵便番号             9:住所_1                10:住所_2
+#  11:TEL                12:携帯               13:メールアドレス      14:オーナー備考         15:書類送付先
+#  16:連絡先関係         17:連絡先会社名       18:連絡先役職名        19:連絡先氏名           20:連絡先郵便番号
+#  21:連絡先住所_1       22:連絡先住所_2       23:連絡先TEL           24:連絡先携帯           25:連絡先メールアドレス
+#  26:お中元お歳暮会社名 27:お中元お歳暮役職名 28:お中元お歳暮氏名    29:お中元お歳暮郵便番号 30:お中元お歳暮住所_1
+#  31:お中元お歳暮住所_2 32:お中元お歳暮TEL    33:お中元お歳暮携帯    34:連絡先備考           35:契約種類
+#  36:契約先区分         37:お中元_お歳暮品目  38:お中元_お歳暮送付先 39:お中元備考           40:契約先コード
+#  41:県名               42:マイナンバー       43:事業者              44:摘要                 45:削除F
+#  46:更新日時
+self 2 3 4 5 7                        |
+awk '{if($4=="_")$4=$5;print}'        |
+self 1/4                              |
+msort key=1/3                         >$tmp-owner_master
+# 1:会社名    2:オーナーCD           3:オーナーCD枝番        4:オーナー名
+ERROR_CHECK
+
+# 契約情報の取得
+#  1:ID                2:会社              3:店舗コード         4:管理番号          5:業態
+#  6:使用状態          7:担当者            8:オーナーCD         9:オーナーCD_枝番   10:契約先
+#  11:個人法人区分     12:契約名称         13:賃貸借関係        14:契約種類         15:物件名
+#  16:OPEN日           17:契約日           18:契約期間開始日    19:原契約期間満了日 20:契約期間満了日
+#  21:次回改定日       22:改定条件         23:更新条件          24:更新予告         25:更新手数料
+#  26:自動更新         27:解約予告         28:解約条件          29:明渡条件         30:契約敷地面積
+#  31:契約敷地合計     32:契約延床面積     33:契約先コード      34:契約形態         35:都道府県名
+#  36:摘要             37:交渉履歴         38:主キー項目        39:オーナーCD2      40:オーナーCD枝番2
+#  41:オーナーCD2解約F 42:オーナーCD3      43:オーナーCD枝番3   44:オーナーCD3解約F 45:オーナーCD4
+#  46:オーナーCD枝番4  47:オーナーCD4解約F 48:オーナーCD5       49:オーナーCD枝番5  50:オーナーCD5解約F
+#  51:オーナーCD6      52:オーナーCD枝番6  53:オーナーCD6解約F  54:オーナーCD7      55:オーナーCD枝番7
+#  56:オーナーCD7解約F 57:オーナーCD8      58:オーナーCD枝番8   59:オーナーCD8解約F 60:オーナーCD9
+#  61:オーナーCD枝番9  62:オーナーCD9解約F 63:オーナーCD10      64:オーナーCD枝番10 65:オーナーCD10解約F
+#  66:オーナーCD11     67:オーナーCD枝番11 68:オーナーCD11解約F 69:削除F            70:更新日時
+cat $lv3d/KEIYAKU/KEIYAKU                     |
+selr --through "_" 2 "$kaisha"                |
+# 店舗開始検索
+if [ "$tenpo_start" == "_" ];then
+  cat
+else
+  uawk '$3>= "'$tenpo_start'"'
+fi                                            |
+# 店舗終了検索
+if [ "$tenpo_end" == "_" ];then
+  cat
+else
+  uawk '$3<= "'$tenpo_end'"'
+fi                                            |
+if [ "$keiyaku" == "no" ];then
+        delr 6 "007"
+else
+        cat
+fi                                            |
+self  2 3 4 10  33 15 8 9                     |
+msort key=1/3                                 >$tmp-keiyaku
+ERROR_CHECK
+# 1:会社             2:店舗コード       3:管理番号      4:契約先      5:契約先コード
+# 6:物件名           7:オーナーCD       8:オーナーCD枝番
+
+cat $lv3d/SHIKIHO/SHIKIHO                     |
+# 敷金保証金建設協力金情報
+#  1:ID          2:会社             3:店舗コード       4:管理番号              5:契約先     
+#  6:契約種類    7:敷金保証金区分   8:建設協力金番号   9:建設協力金番号枝番   10:金額_円   
+#  11:返済条件   12:返済期間_開始月 13:返済期間_終了月 14:償還条件            15:初回方法  
+#  16:初回償還額 17:定期方法        18:定期償還額      19:最終方法            20:最終償還額
+#  21:削除F      22:更新日時       
+self 2 3 4 5 7 8 9 10 12 13 16 18 20          |
+#  1:会社             2:店舗コード          3:管理番号  4:契約先           5:敷金保証金区分
+#  6:建設協力金番号   7:建設協力金番号枝番  8:金額_円   9:返済期間_開始月 10:返済期間_終了月
+# 11:初回償還額      12:定期償還額         13:最終償還額
+
+awk '{print $0,'${today_yymm}'}'              |
+#  14:今月
+mdate -f 14m 9m                                |
+self 1/9 11/NF 10                              |
+#  14:今月       15:返済済期間
+
+lcalc '$0,$11>0?1:0,$13>0?1:0'                                            |
+#  14:今月       15:返済済期間 16:初回償還フラグ 17:最終償還フラグ
+
+lcalc '$0,$12>0?($8-$11-$13)/$12+$16+$17:$16+$17' |
+#  14:今月       15:返済済期間 16:初回償還フラグ 17:最終償還フラグ 18:分母
+
+awk '{if($14>=$9){print $0,1,$11}else{print $0,0,0}}'     |
+#  14:今月       15:返済済期間 16:初回償還フラグ 17:最終償還フラグ 18:分母
+#  19:初回償還済回数 20:初回償還済金額
+
+awk '{if($14>=$9&&$15>0&&$12>0){print $0,$15,$12*$15}else{print $0,0,0}}'     |
+#  14:今月       15:返済済期間 16:初回償還フラグ 17:最終償還フラグ 18:分母
+#  19:初回償還済回数 20:初回償還済金額 21:定期償還済回数 22:定期償還済金額
+
+#  ここから再開
+awk '{if($14>=$9&&$14>=$10){print $0,$18,$8}else{print $0,$19+$21,$23+$22}}'       |
+#  14:今月       15:返済済期間 16:初回償還フラグ 17:最終償還フラグ 18:分母
+#  19:初回償還済回数 20:初回償還済金額 21:定期償還済回数 22:定期償還済金額 23:全償還済回数
+#  24:全償還済金額
+
+awk '{if($14>=$9&&$14>=$10){print $0,0}else{print $0,$8-$25}}'     |
+#  1:会社             2:店舗コード          3:管理番号  4:契約先           5:敷金保証金区分
+#  6:建設協力金番号   7:建設協力金番号枝番  8:金額_円   9:返済期間_開始月 10:返済期間_終了月
+# 11:初回償還額      12:定期償還額         13:最終償還額
+#  14:今月       15:返済済期間 16:初回償還フラグ 17:最終償還フラグ 18:分母
+#  19:初回償還済回数 20:初回償還済金額 21:定期償還済回数 22:定期償還済金額 23:全償還済回数
+#  24:全償還済金額  25:残高
+self 1/7           25                         |
+awk '$8>0'                                    |
+delf NF                                       |
+msort key=1/3                                 >$tmp-shikiho
+ERROR_CHECK
+#  1:会社        2:店舗コード       3:管理番号         4:契約先       5:敷金保証金区分
+#  6:建設協力金番号   7:建設協力金番号枝番
+
+# 契約情報と敷金保証金建設協力金の結合
+cjoin2x +- key=1/3 $tmp-shikiho $tmp-keiyaku     |
+self 1/3 8/NF 4/7                             |
+msort key=1/3@10@11@12                        |
+# 1:会社        2:店舗コード       3:管理番号         4:契約先              5::契約先コード
+# 6::物件名     7:オーナーCD       8:オーナーCD枝番   9:契約先(敷金保証金) 10::敷金保証金区分
+# 11:建設協力金番号          12:建設協力金番号枝番
+getfirst +ng3 key=1/3@10@11 3>$tmp-shikiho_keiyaku_second    >$tmp-shikiho_keiyaku_first
+ERROR_CHECK
+
+# 賃料改定履歴
+cat $lv3d/CHINRYOKAITE/CHINRYOKAITE           |
+# 賃料改定履歴
+#  1:会社      2:店舗コード  3:管理番号 4:更新日      5:契約先
+#  6:契約種類  7:賃料        8:管理費   9:駐車料      10:その他
+#  11:消費税   12:消費税区分 13:相殺額  14:月額支払額 15:改定内容
+#  16:支払方法 17:歩合       18:削除F   19:更新日時
+self 1 2 3 4 5                                |
+msort key=1/3                                 |
+getlast key=1/3                               >$tmp-chinryo_kaitei
+ERROR_CHECK
+# 1:会社      2:店舗コード  3:管理番号     4:賃料更新日      5:賃料契約先
+
+# 契約情報(敷金保証金建設協力金)と賃料改定履歴の結合
+cjoin2x +- key=1/3  $tmp-chinryo_kaitei $tmp-shikiho_keiyaku_first |
+self 1 9 10 2 3 6 7 8 11 12 13 14 4 5       |
+# 1:会社        2:オーナーCD       3:オーナーCD枝番   4:店舗コード       5:管理番号  
+# 6:契約先      7::契約先コード    8:物件名           9:契約先(敷金保証金) 10::敷金保証金区分
+# 11:建設協力金番号          12:建設協力金番号枝番   13:賃料更新日      14:賃料i約先
+# 契約情報(敷金保証金建設協力金・賃料改定履歴)とオーナー情報の結合
+msort key=1/3                               |   
+cjoin2 key=1/3 $tmp-owner_master -          | 
+self 1 5 6 7 8 9 2 3 4 10 11 12 13 14 15    |
+msort key=1/3                               >$tmp-keiyaku_seigo_first
+ERROR_CHECK
+# 1:会社              2:店舗コード        3:管理番号             4:契約先           5::契約先コード
+# 6::物件名           7:オーナーCD        8:オーナーCD枝番       9:オーナー名      10:契約先(敷金保証金) 
+# 11 敷金保証金区分  12:建設協力金番号   13:建設協力金番号枝番  14:賃料改定更新日　15:賃料改定契約先
+
+# 契約情報(敷金保証金建設協力金・賃料改定履歴)とオーナー情報の結合
+if [ -s  $tmp-shikiho_keiyaku_second ]; then    
+     cat $tmp-shikiho_keiyaku_second       |
+     self 1 7 8 2 3 4 5 6 9 10 11 12       |
+     cjoin2 key=1/3 $tmp-owner_master -    |
+     strcat  1 5 6 7 8 9 2 3 4 10/NF  \"-\" \"-\"                | 
+     cat $tmp-keiyaku_seigo_first -   
+else
+  cat $tmp-keiyaku_seigo_first              
+fi                                         |    
+# 店舗名の設定
+cjoin2 key=1/2 $tmp-tenpo_name -           |
+# 店舗名の設定
+cjoin2 key=1 $tmp-kaisha_name -            |
+delf 1                                     |
+#  1:会社                 2:店舗コード        3:店舗名            4:管理番号         5:契約先
+#  6::契約先コード        7:物件名            8:オーナーCD        9:オーナーCD枝番  10:オーナー名
+# 11:契約先(敷金保証金)  12:敷金保証金区分  13:建設協力金番号   14:建設協力金番号枝番  15:賃料改定更新日　
+# 16:賃料改定契約先
+# 店舗名の設定
+cjoin2 +- key=12 $tmp-shikiho_kubun_name      |
+delf 12                                    |
+msort key=1/2@4@12@13@14@15                |
+uawk '{i="-";if($10=="-"){j="-"}else{if($5==$10){j="〇";i="同様"}else{j="×";i="相違"}}  \
+            if($11=="-"){k="-"}else{if($5==$11){k="〇"}else{k="×";i="相違"}} \
+            if($16=="-"){l="-"}else{if($5==$16){l="〇"}else{l="×";i="相違"}}}{print i,$0,j,k,l}' |
+if [ "$diff_display" == "yes" ];then
+        selr 1 "相違"
+else
+        cat
+fi                                            |
+juni                                       > $tmp-data
+# (+1) 
+ERROR_CHECK
+
+
+# 送信情報の作成
+cat $htmd/KEIYAKU_SEIGO.HTML                                             |
+sed -n '/検索テーブルA/,/検索テーブルB/p'                                |
+#mojihame -l###契約名称リスト### - $lv3d/TBL/KEIYAKU_MEISHO_SORT          |
+#mojihame -l###敷金保証金区分リスト### - $lv3d/TBL/SHIKIHO_KUBUN_SORT     |
+#mojihame -l###返済条件リスト### - $lv3d/TBL/HENSAI_JOKEN_SORT            |
+#mojihame -l###償還条件リスト### - $lv3d/TBL/HENSAI_JOKEN_SORT            |
+mojihame -l###整合表### - $tmp-data                    |
+cat                                                                      > $tmp-ajax
+ERROR_CHECK
+
+##################################################
+# 情報送信
+echo "Content-type:text/html"
+echo
+cat $tmp-ajax
+
+#################################################
+# 終了処理
+rm -rf $tmp-*
+exit 0
